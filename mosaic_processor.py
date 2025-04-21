@@ -197,12 +197,26 @@ class MosaicProcessor:
         motion_changed = abs(motion_level - self.last_motion_level) > 0.02
         self.last_motion_level = motion_level
         
+        # 프레임당 평균 처리 시간이 80ms를 넘으면 스킵 가능성 높임
+        should_skip = False
+        if hasattr(self, 'avg_processing_time') and self.avg_processing_time > 80:
+            # 모션 기반 스킵: 정적 장면에서 더 자주 스킵
+            if motion_level < 0.01:  # 거의 움직임 없음
+                should_skip = self.frame_count % 7 != 0  # 7프레임마다 처리
+            elif motion_level < 0.05:  # 약간의 움직임
+                should_skip = self.frame_count % 4 != 0  # 4프레임마다 처리
+            else:  # 활발한 움직임
+                should_skip = self.frame_count % 2 != 0  # 2프레임마다 처리
+        
         # 성능 개선: 모션 수준에 따라 감지 간격 동적 조정
         if motion_level > 0.1:
             effective_interval = max(1, self.detection_interval // 2)
         else:
             effective_interval = self.detection_interval
-            
+        
+        # 최적화된 입력 크기 (더 작게)
+        self.input_size = (320, 180)  # 384x224에서 축소
+                
         # 이미지 해시 계산 및 변화 감지
         force_detect = False
         if self.frame_count % 5 == 0:  # 더 자주 해시 계산 (5프레임마다)
@@ -218,13 +232,16 @@ class MosaicProcessor:
         # 감지 실행 조건: 간격, 강제 감지, 모션 변화
         should_detect = (self.frame_count - self.last_detection_frame >= effective_interval 
                         or force_detect 
-                        or motion_changed)
+                        or motion_changed) and not should_skip
 
         # 감지 및 추적
         detected_boxes = []
         try:
             if should_detect:
                 self.last_detection_frame = self.frame_count
+                
+                # 감지 시작 시간 기록
+                detect_start = time.time()
                 
                 # 성능 개선: 작은 크기로 리사이즈하여 YOLO 처리 속도 향상
                 resized = cv2.resize(image, self.input_size, interpolation=cv2.INTER_AREA)
@@ -254,6 +271,18 @@ class MosaicProcessor:
                             
                             # SORT 형식으로 변환
                             detected_boxes.append([x1_orig, y1_orig, x2_orig, y2_orig, conf, int(class_id)])
+                
+                # 감지 시간 계산 및 평균 업데이트
+                detect_time = (time.time() - detect_start) * 1000
+                if not hasattr(self, 'avg_processing_time'):
+                    self.avg_processing_time = detect_time
+                else:
+                    # 이동 평균 (90% 이전 값, 10% 새 값)
+                    self.avg_processing_time = 0.9 * self.avg_processing_time + 0.1 * detect_time
+                    
+                # 진단 로깅
+                if self.frame_count % 100 == 0:
+                    print(f"⏱️ 감지 시간: {detect_time:.1f}ms, 평균: {self.avg_processing_time:.1f}ms")
             
             # Sort 트래커 업데이트
             tracked_boxes = self.tracker.update(detected_boxes if detected_boxes else [])
@@ -276,24 +305,51 @@ class MosaicProcessor:
                         h = min(image.shape[0] - y, int(y2 - y1))
                         
                         if w > 0 and h > 0:
+                            # 성능 최적화: 너무 큰 영역은 하위 샘플링
+                            region_size = w * h
+                            region_scale = 1.0
+                            
+                            # 큰 영역 다운샘플링 (최대 크기: 400x400 픽셀)
+                            if region_size > 160000:  # 400x400
+                                region_scale = min(1.0, 160000 / region_size)
+                                scaled_w = max(10, int(w * region_scale))
+                                scaled_h = max(10, int(h * region_scale))
+                                
+                                # 원본 영역 추출
+                                region = image[y:y+h, x:x+w].copy()
+                                
+                                # 작은 크기로 리사이즈
+                                region = cv2.resize(region, (scaled_w, scaled_h), 
+                                                interpolation=cv2.INTER_AREA)
+                                                
+                                # 고유 ROI 키 생성 (다운샘플링 포함)
+                                roi_key = f"{label}_{int(x/10)}_{int(y/10)}_{int(w/10)}_{int(h/10)}_{region_scale:.2f}"
+                            else:
+                                # 원본 크기 영역 추출
+                                region = image[y:y+h, x:x+w].copy()
+                                
+                                # 고유 ROI 키 생성
+                                roi_key = f"{label}_{int(x/10)}_{int(y/10)}_{int(w/10)}_{int(h/10)}"
+                            
                             # 영역이 안정적인지 확인 (색상 왜곡 및 깜빡임 방지)
                             is_stable = self.update_region_stability(label, (x, y, w, h))
                             
                             # 안정적인 영역만 처리 (영역 크기가 매우 작으면 무조건 처리)
                             if is_stable or (w < 50 and h < 50):
-                                # 모자이크 영역 추출
-                                region = image[y:y+h, x:x+w].copy()
-                                
-                                # 고유 ROI 키 생성
-                                roi_key = f"{label}_{int(x/10)}_{int(y/10)}_{int(w/10)}_{int(h/10)}"
-                                
                                 # 캐시된 모자이크 받기 또는 새로 계산
                                 mosaic_region = self.get_cached_mosaic(region, roi_key)
+                                
+                                # 다운샘플링된 경우 다시 원본 크기로
+                                if region_scale < 1.0:
+                                    mosaic_region = cv2.resize(mosaic_region, (w, h), 
+                                                            interpolation=cv2.INTER_NEAREST)
                                 
                                 # 결과 추가
                                 detected_regions.append((x, y, w, h, label, mosaic_region))
                     except Exception as e:
                         print(f"❌ 모자이크 오류: {e} @ ({x},{y},{w},{h})")
+                        import traceback
+                        traceback.print_stack()
 
         except Exception as e:
             print(f"❌ 감지 오류: {e}")

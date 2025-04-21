@@ -136,36 +136,50 @@ class ScreenCapturer:
         print("🛑 캡처 스레드 종료")
     
     def _capture_screen(self, sct):
-        """실제 화면 캡처 로직"""
+        """실제 화면 캡처 로직 - 최적화 버전"""
         try:
             # MSS로 화면 캡처
             sct_img = sct.grab(self.monitor)
             
-            # PIL/Pillow 이미지를 Numpy 배열로 변환
-            img = np.array(sct_img)
+            # 빠른 변환을 위한 Numpy 배열 직접 접근
+            img = np.array(sct_img, dtype=np.uint8)
             
-            # BGRA -> BGR 변환
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            # Numpy 연산으로 BGR 변환 (최적화)
+            if img.shape[2] == 4:  # BGRA
+                img = img[:, :, :3]  # BGR만 추출 (알파 채널 제거)
             
-            # 스케일 적용된 경우 리사이즈
+            # 성능 최적화: 필요한 경우만 다운스케일
             if self.capture_downscale != 1.0:
+                target_width = int(self.screen_width * self.capture_downscale)
+                target_height = int(self.screen_height * self.capture_downscale)
+                
+                # 더 빠른 다운샘플링 (품질보다 속도 우선)
                 img = cv2.resize(
                     img, 
-                    (self.capture_width, self.capture_height), 
-                    interpolation=cv2.INTER_AREA
+                    (target_width, target_height), 
+                    interpolation=cv2.INTER_NEAREST
                 )
             
-            # 제외 영역 마스킹 (오버레이 윈도우 위치 마스킹)
-            # if self.exclude_regions:
-            #     for x, y, w, h in self.exclude_regions:
-            #         # 검은색 사각형으로 채움
-            #         cv2.rectangle(img, (x, y), (x+w, y+h), (0, 0, 0), -1)
+            # 제외 영역 마스킹 (필요한 경우)
+            if self.exclude_regions:
+                for x, y, w, h in self.exclude_regions:
+                    # 좌표 유효성 검사
+                    if (x >= 0 and y >= 0 and 
+                        x < img.shape[1] and y < img.shape[0]):
+                        # 실제 그릴 영역 계산 (범위 초과 방지)
+                        end_x = min(x + w, img.shape[1])
+                        end_y = min(y + h, img.shape[0])
+                        
+                        # 검은색 사각형으로 채움 (성능 최적화: 직접 배열 접근)
+                        img[y:end_y, x:end_x] = 0
             
             # 디버깅 모드: 주기적으로 화면 캡처 저장
             if self.debug_mode and self.frame_count % 300 == 0:  # 약 10초마다
                 try:
                     debug_path = f"{self.debug_dir}/screen_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
-                    cv2.imwrite(debug_path, img)
+                    
+                    # 고품질 저장 필요 없는 경우 압축률 높이기
+                    cv2.imwrite(debug_path, img, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     print(f"📸 디버깅용 화면 캡처 저장: {debug_path} (크기: {img.shape})")
                 except Exception as e:
                     print(f"⚠️ 디버깅 캡처 저장 실패: {e}")

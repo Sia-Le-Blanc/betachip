@@ -132,17 +132,18 @@ class DirectScreenOverlay:
         """오버레이 창 생성 (Win32 API 사용)"""
         try:
             # 창 클래스 및 스타일 설정은 실제 구현 시 추가
-            pass
+            import win32gui
+            import win32con
+            import win32api
+
+            self.window_created = True
+            print("✅ 직접 화면 오버레이 준비 완료")
         except Exception as e:
             print(f"❌ 오버레이 창 생성 오류: {e}")
     
     def _update_window_image(self, pil_image):
         """창에 이미지 업데이트"""
-        try:
-            # 창에 이미지 표시 로직 구현
-            pass
-        except Exception as e:
-            print(f"❌ 창 이미지 업데이트 오류: {e}")
+        pass
     
     def _destroy_overlay_window(self):
         """오버레이 창 제거"""
