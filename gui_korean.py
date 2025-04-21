@@ -79,3 +79,14 @@ class MainWindow(QWidget):
 
     def get_strength(self):
         return self.strength
+    
+    # MainWindow 클래스 수정
+    def set_render_mode_info(self, mode_info):
+        """렌더링 모드 정보 설정"""
+        if not hasattr(self, 'render_mode_label'):
+            # 레이블이 없으면 새로 생성
+            self.render_mode_label = QLabel(mode_info)
+            self.layout().addWidget(self.render_mode_label)
+        else:
+            # 기존 레이블 텍스트 업데이트
+            self.render_mode_label.setText(mode_info)

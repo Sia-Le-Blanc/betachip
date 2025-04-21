@@ -8,7 +8,7 @@ import argparse
 import numpy as np
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtCore import QThread, pyqtSignal, QTimer, QElapsedTimer
+from PyQt5.QtCore import QThread, pyqtSignal, QTimer, QElapsedTimer, QT_VERSION_STR
 
 from gui_korean import MainWindow
 from cv_overlay_window import TransparentOverlayWindow
@@ -54,6 +54,20 @@ class ProcessingThread(QThread):
         self.pause_event.set()
 
     def run(self):
+        if hasattr(os, 'sched_setaffinity'):
+            try:
+                os.sched_setaffinity(0, {0, 1})  # CPU 코어 할당
+            except:
+                pass
+        else:
+            try:
+                import win32api, win32process, win32con
+                win32process.SetThreadPriority(
+                    win32api.GetCurrentThread(),
+                    win32con.THREAD_PRIORITY_HIGHEST
+                )
+            except:
+                pass
         self.timer.start()
         self.frame_count = 0
         start_time = time.time()
@@ -154,24 +168,88 @@ class ProcessingThread(QThread):
                 traceback.print_exc()
                 time.sleep(0.1)
 
+
     def stop(self):
         self.stop_event.set()
         self.pause_event.set()
         self.wait(1000)
 
+def check_gpu_availability():
+    """GPU 사용 가능 여부와 종류를 확인"""
+    gpu_available = False
+    gpu_info = "CPU 모드"
+    
+    # CUDA 가용성 확인
+    try:
+        if torch.cuda.is_available():
+            gpu_available = True
+            gpu_info = f"CUDA GPU: {torch.cuda.get_device_name(0)}"
+            print(f"✅ {gpu_info} 감지됨")
+            return gpu_available, "cuda", gpu_info
+    except Exception as e:
+        print(f"CUDA 확인 중 오류: {e}")
+    
+    # DirectX/GPU 가속 확인 (Windows 환경)
+    try:
+        import ctypes
+        from ctypes import windll
+        if windll.dxgi.CreateDXGIFactory != None:  # DirectX 사용 가능 여부
+            # 간단한 DirectX 기능 테스트
+            result = windll.d3d11.D3D11CreateDevice(None, 0, None, 0, None, 0, None, None, None)
+            if result == 0:  # 성공
+                gpu_available = True
+                gpu_info = "DirectX GPU 가속 가능"
+                print(f"✅ {gpu_info} 감지됨")
+                return gpu_available, "directx", gpu_info
+    except Exception as e:
+        print(f"DirectX 확인 중 오류: {e}")
+    
+    print(f"ℹ️ {gpu_info}로 실행됩니다")
+    return gpu_available, "cpu", gpu_info
+
+
 if __name__ == "__main__":
     try:
+        # 파싱은 한 번만 수행
         parser = argparse.ArgumentParser(description='실시간 화면 모자이크 처리 프로그램')
         parser.add_argument('--debug', action='store_true', help='디버깅 모드 활성화')
+        parser.add_argument('--force-cpu', action='store_true', help='CPU 모드 강제 사용')
         args = parser.parse_args()
 
         from PyQt5.QtCore import QT_VERSION_STR
         print(f"🚀 Qt 버전: {QT_VERSION_STR}")
         print(f"🚀 OpenCV 버전: {cv2.__version__}")
-
+        
+        # GPU 확인
+        gpu_available, render_mode, gpu_info = check_gpu_availability()
+        if args.force_cpu:
+            render_mode = "cpu"
+            gpu_info = "CPU 모드 (강제 설정)"
+            print("ℹ️ CPU 모드로 강제 전환됨")
+        
+        # QApplication은 한 번만 생성
         app = QApplication(sys.argv)
         window = MainWindow()
-        overlay = TransparentOverlayWindow()
+        
+        # 렌더 모드에 따라 적절한 오버레이 생성
+        if render_mode == "directx":
+            from directx_overlay_window import DirectXOverlayWindow
+            overlay = DirectXOverlayWindow()
+        elif render_mode == "cuda":
+            from cuda_overlay_window import CudaOverlayWindow
+            overlay = CudaOverlayWindow()
+        else:  # CPU 모드
+            # 고성능 직접 렌더링 방식 사용
+            from direct_screen_overlay import DirectScreenOverlay
+            overlay = DirectScreenOverlay()  # 원래 오버레이 사용
+                    # from win32_overlay_window import Win32OverlayWindow
+            # overlay = Win32OverlayWindow()
+        
+        # UI에 현재 모드 표시 (함수가 구현되어 있다면)
+        if hasattr(window, 'set_render_mode_info'):
+            window.set_render_mode_info(gpu_info)
+        
+        # 기존 설정 계속 사용
         capturer = ScreenCapturer(debug_mode=args.debug)
         processor = MosaicProcessor("resources/best_weights_only.pt")
 
