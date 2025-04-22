@@ -12,8 +12,7 @@ import numpy as np
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer, QElapsedTimer, QT_VERSION_STR
 
-from gui_korean import MainWindow
-from cv_overlay_window import TransparentOverlayWindow
+from gui_korean import GUIController as MainWindow
 from mss_capture import ScreenCapturer
 from mosaic_processor import MosaicProcessor
 
@@ -287,16 +286,10 @@ if __name__ == "__main__":
             from cuda_overlay_window import CudaOverlayWindow
             overlay = CudaOverlayWindow()
         else:  # CPU 모드
-            # 고성능 직접 렌더링 방식 사용
-            try:
-                from direct_screen_overlay import DirectScreenOverlay
-                overlay = DirectScreenOverlay()
-                print("✅ DirectScreenOverlay 사용 중")
-            except ImportError:
-                # 직접 렌더링 구현이 없으면 기본 오버레이 사용
-                overlay = TransparentOverlayWindow()
-                print("⚠️ 기본 TransparentOverlayWindow로 대체됨")
-        
+            # Win32 오버레이 사용
+            from win32_overlay_window import Win32OverlayWindow
+            overlay = Win32OverlayWindow()
+            print("✅ Win32OverlayWindow 사용 중")
         # UI에 현재 모드 표시
         if hasattr(window, 'set_render_mode_info'):
             window.set_render_mode_info(gpu_info)
