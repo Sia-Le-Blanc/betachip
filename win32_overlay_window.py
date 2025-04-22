@@ -50,11 +50,29 @@ class Win32OverlayWindow:
     
     def _register_window_class(self):
         """윈도우 클래스 등록"""
-        self.wc = wintypes.WNDCLASSEXW()
-        self.wc.cbSize = ctypes.sizeof(wintypes.WNDCLASSEXW)
+        # WNDCLASSEXW 구조체 정의
+        class WNDCLASSEXW(ctypes.Structure):
+            _fields_ = [
+                ('cbSize', ctypes.c_uint),
+                ('style', ctypes.c_uint),
+                ('lpfnWndProc', ctypes.c_void_p),
+                ('cbClsExtra', ctypes.c_int),
+                ('cbWndExtra', ctypes.c_int),
+                ('hInstance', ctypes.c_void_p),
+                ('hIcon', ctypes.c_void_p),
+                ('hCursor', ctypes.c_void_p),
+                ('hbrBackground', ctypes.c_void_p),
+                ('lpszMenuName', ctypes.c_wchar_p),
+                ('lpszClassName', ctypes.c_wchar_p),
+                ('hIconSm', ctypes.c_void_p)
+            ]
+        
+        self.wc = WNDCLASSEXW()
+        self.wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
         self.wc.style = 0
-        self.wc.lpfnWndProc = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_uint, 
-                                               ctypes.c_uint, ctypes.c_int)(self._window_proc)
+        self.wc.lpfnWndProc = ctypes.cast(ctypes.WINFUNCTYPE(
+            ctypes.c_long, ctypes.c_void_p, ctypes.c_uint, 
+            ctypes.c_void_p, ctypes.c_void_p)(self._window_proc), ctypes.c_void_p)
         self.wc.cbClsExtra = 0
         self.wc.cbWndExtra = 0
         self.wc.hInstance = windll.kernel32.GetModuleHandleW(None)
