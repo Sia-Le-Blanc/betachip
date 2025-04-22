@@ -30,6 +30,11 @@ class MosaicProcessor:
             self.model.to(self.device)
             self.model.eval()
             
+            dummy_input = torch.randn(1, 3, 192, 320).to(self.device)
+            with torch.no_grad():
+                _ = self.model(dummy_input)
+            print("✅ 모델 워밍업 완료")
+
             # GPU 사용 시 메모리 최적화
             if self.device == "cuda":
                 torch.cuda.empty_cache()
@@ -215,7 +220,7 @@ class MosaicProcessor:
             effective_interval = self.detection_interval
         
         # 최적화된 입력 크기 (더 작게)
-        self.input_size = (320, 180)  # 384x224에서 축소
+        self.input_size = (320, 192)  # 384x224에서 축소
                 
         # 이미지 해시 계산 및 변화 감지
         force_detect = False
@@ -243,13 +248,18 @@ class MosaicProcessor:
                 # 감지 시작 시간 기록
                 detect_start = time.time()
                 
+                target_width = 320  # 32 * 10
+                target_height = 192  # 32 * 6
                 # 성능 개선: 작은 크기로 리사이즈하여 YOLO 처리 속도 향상
-                resized = cv2.resize(image, self.input_size, interpolation=cv2.INTER_AREA)
-                
+                resized = cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_AREA)
+
                 # 입력 텐서 준비
                 input_tensor = resized.transpose(2, 0, 1) / 255.0
                 input_tensor = np.ascontiguousarray(input_tensor)
                 tensor = torch.from_numpy(input_tensor).float().unsqueeze(0).to(self.device)
+
+                if self.frame_count % 100 == 0:
+                    print(f"🔍 입력 텐서 크기: {tensor.shape}")
 
                 # YOLO 추론
                 with torch.no_grad():
