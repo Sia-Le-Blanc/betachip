@@ -235,10 +235,10 @@ class MosaicProcessor:
             self.prev_frame_hash = current_hash
 
         # 감지 실행 조건: 간격, 강제 감지, 모션 변화
-        should_detect = (self.frame_count - self.last_detection_frame >= effective_interval 
+        # mosaic_processor.py의 should_detect 부분 수정
+        should_detect = (self.frame_count - self.last_detection_frame >= 1  # 매 프레임 감지
                         or force_detect 
                         or motion_changed) and not should_skip
-
         # 감지 및 추적
         detected_boxes = []
         try:

@@ -128,10 +128,10 @@ class Win32OverlayWindow:
         ]
         CreateWindowExW.restype = ctypes.c_void_p
         
-        # 윈도우 생성
+        # 윈도우 생성 - WS_EX_TRANSPARENT 유지 (클릭 통과 가능)
         self.hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-            "MosaicOverlayClass",  # 직접 문자열 전달
+            "MosaicOverlayClass",
             "Mosaic Overlay",
             WS_POPUP | WS_VISIBLE,
             0, 0, self.width, self.height,
@@ -143,8 +143,8 @@ class Win32OverlayWindow:
             print(f"❌ 윈도우 생성 실패. 오류 코드: {error}")
             return
         
-        # 윈도우를 투명하게 설정
-        windll.user32.SetLayeredWindowAttributes(self.hwnd, 0, 255, 2)  # LWA_ALPHA = 2
+        # 윈도우를 투명하게 설정 (약간 더 불투명하게 - 180)
+        windll.user32.SetLayeredWindowAttributes(self.hwnd, 0, 180, 2)  # LWA_ALPHA = 2
         
         # 항상 최상위로 설정
         windll.user32.SetWindowPos(
@@ -156,7 +156,7 @@ class Win32OverlayWindow:
     def _render_thread_func(self):
         """렌더링 스레드 함수"""
         while not self.stop_event.is_set():
-            if self.shown and self.mosaic_regions:
+            if self.shown:  # 항상 렌더링 (테스트 사각형 포함)
                 self._render_overlay()
             time.sleep(self.render_interval)
     
@@ -184,8 +184,25 @@ class Win32OverlayWindow:
             old_bitmap = windll.gdi32.SelectObject(mem_dc, bitmap)
             
             # 투명한 배경으로 초기화
-            windll.gdi32.SelectObject(mem_dc, windll.gdi32.GetStockObject(5))  # NULL_BRUSH
-            windll.gdi32.Rectangle(mem_dc, 0, 0, self.width, self.height)
+            windll.gdi32.BitBlt(mem_dc, 0, 0, self.width, self.height, None, 0, 0, 0x42)  # BLACKNESS
+            
+            # _render_overlay 함수에서 배경 초기화 후
+            red_brush = windll.gdi32.CreateSolidBrush(0x0000FF)  # BGR 색상 (빨간색)
+            windll.gdi32.SelectObject(mem_dc, red_brush)
+            # 화면 중앙에 큰 사각형 그리기
+            windll.gdi32.Rectangle(mem_dc, self.width//4, self.height//4, 
+                                self.width*3//4, self.height*3//4)
+            windll.gdi32.DeleteObject(red_brush)
+
+            # 테스트용 작은 사각형 그리기 (오버레이 창이 보이는지 확인용)
+            # 모서리에 작은 사각형 4개를 그려 창이 작동하는지 확인
+            red_brush = windll.gdi32.CreateSolidBrush(0x0000FF)  # BGR 색상 (빨간색)
+            windll.gdi32.SelectObject(mem_dc, red_brush)
+            windll.gdi32.Rectangle(mem_dc, 50, 50, 100, 100)  # 왼쪽 상단
+            windll.gdi32.Rectangle(mem_dc, self.width-100, 50, self.width-50, 100)  # 오른쪽 상단
+            windll.gdi32.Rectangle(mem_dc, 50, self.height-100, 100, self.height-50)  # 왼쪽 하단
+            windll.gdi32.Rectangle(mem_dc, self.width-100, self.height-100, self.width-50, self.height-50)  # 오른쪽 하단
+            windll.gdi32.DeleteObject(red_brush)
             
             # 모자이크 영역 그리기
             for x, y, w, h, label, mosaic_img in self.mosaic_regions:
@@ -251,7 +268,7 @@ class Win32OverlayWindow:
             bf = BLENDFUNCTION()
             bf.BlendOp = AC_SRC_OVER
             bf.BlendFlags = 0
-            bf.SourceConstantAlpha = 255
+            bf.SourceConstantAlpha = 180  # 투명도 조정
             bf.AlphaFormat = AC_SRC_ALPHA
             
             # 투명 윈도우 업데이트
@@ -319,15 +336,31 @@ class Win32OverlayWindow:
             
             self.frame_count += 1
             
+            # 모자이크 영역 강조를 위해 테두리 추가
+            enhanced_regions = []
+            for x, y, w, h, label, mosaic_img in mosaic_regions:
+                if mosaic_img is not None:
+                    # 모자이크 이미지에 빨간색 테두리 추가 (더 잘 보이게)
+                    cv2.rectangle(mosaic_img, (0, 0), (w-1, h-1), (0, 0, 255), 3)
+                    # 필요시 텍스트 추가
+                    cv2.putText(mosaic_img, label, (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    enhanced_regions.append((x, y, w, h, label, mosaic_img))
+                else:
+                    enhanced_regions.append((x, y, w, h, label, None))
+            
             # 원본 이미지와 모자이크 영역 저장
             self.original_image = original_image
-            self.mosaic_regions = mosaic_regions
+            self.mosaic_regions = enhanced_regions
             
-            # 로그 출력
-            if len(mosaic_regions) > 0 and self.frame_count % 100 == 0:
-                print(f"✅ 모자이크 영역 {len(mosaic_regions)}개 처리 중 (프레임 #{self.frame_count})")
-                self._save_debug_image()
-            
+            # 로그 출력 및 모자이크 영역 수 출력 추가
+            if len(mosaic_regions) > 0:
+                if self.frame_count % 100 == 0:
+                    print(f"✅ 모자이크 영역 {len(mosaic_regions)}개 처리 중 (프레임 #{self.frame_count})")
+                    self._save_debug_image()
+                # 로그 빈도 조절
+                elif self.frame_count % 30 == 0:
+                    print(f"✅ 현재 모자이크 영역: {len(mosaic_regions)}개")
+        
         except Exception as e:
             print(f"❌ 오버레이 업데이트 실패: {e}")
             import traceback
@@ -362,3 +395,4 @@ class Win32OverlayWindow:
         self.hide()
         if self.hwnd:
             windll.user32.DestroyWindow(self.hwnd)
+
