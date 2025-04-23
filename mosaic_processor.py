@@ -366,6 +366,14 @@ class MosaicProcessor:
             import traceback
             traceback.print_exc()
 
+        # detect_objects 함수 끝부분에 추가
+        # 강제 테스트용 모자이크 영역 추가
+        test_x, test_y = 500, 300
+        test_w, test_h = 200, 200
+        test_region = image[test_y:test_y+test_h, test_x:test_x+test_w].copy()
+        pixelated_region = self.pixelate(test_region)
+        detected_regions.append((test_x, test_y, test_w, test_h, "테스트", pixelated_region))
+
         return detected_regions
 
     def pixelate(self, region):
