@@ -47,6 +47,13 @@ class Win32OverlayWindow:
             self._create_window()
         
         print("✅ Win32 API 기반 오버레이 창 초기화 완료")
+        
+        # 모자이크 빠른 테스트를 위한 빨간색 사각형 생성 저장
+        test_rect = np.ones((100, 100, 3), dtype=np.uint8)
+        test_rect[:] = [0, 0, 255]  # BGR - 빨간색
+        cv2.rectangle(test_rect, (0, 0), (99, 99), (255, 255, 255), 3)  # 흰색 테두리
+        cv2.putText(test_rect, "TEST", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        self.test_rect = test_rect
     
     def _register_window_class(self):
         """윈도우 클래스 등록"""
@@ -104,59 +111,72 @@ class Win32OverlayWindow:
     
     def _window_proc(self, hwnd, msg, wparam, lparam):
         """윈도우 프로시저"""
-        if msg == 0x10:  # WM_CLOSE
-            windll.user32.DestroyWindow(hwnd)
-        elif msg == 0x2:  # WM_DESTROY
-            windll.user32.PostQuitMessage(0)
-        
-        # DefWindowProcW 호출 시 매개변수 타입 수정
-        return windll.user32.DefWindowProcW(
-            ctypes.c_void_p(hwnd), 
-            ctypes.c_uint(msg), 
-            ctypes.c_void_p(wparam), 
-            ctypes.c_void_p(lparam)
-        )
+        try:
+            if msg == 0x10:  # WM_CLOSE
+                windll.user32.DestroyWindow(hwnd)
+            elif msg == 0x2:  # WM_DESTROY
+                windll.user32.PostQuitMessage(0)
+            
+            # DefWindowProcW 호출 시 매개변수 타입 수정
+            return windll.user32.DefWindowProcW(
+                ctypes.c_void_p(hwnd), 
+                ctypes.c_uint(msg), 
+                ctypes.c_void_p(wparam), 
+                ctypes.c_void_p(lparam)
+            )
+        except Exception as e:
+            print(f"❌ 윈도우 프로시저 오류: {e}")
+            return 0
     
     def _create_window(self):
         """투명 오버레이 윈도우 생성"""
-        # 함수 원형 선언
-        CreateWindowExW = windll.user32.CreateWindowExW
-        CreateWindowExW.argtypes = [
-            ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint,
-            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
-        ]
-        CreateWindowExW.restype = ctypes.c_void_p
-        
-        # 윈도우 생성 - WS_EX_TRANSPARENT 유지 (클릭 통과 가능)
-        self.hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-            "MosaicOverlayClass",
-            "Mosaic Overlay",
-            WS_POPUP | WS_VISIBLE,
-            0, 0, self.width, self.height,
-            None, None, self.wc.hInstance, None
-        )
-        
-        if not self.hwnd:
-            error = ctypes.GetLastError()
-            print(f"❌ 윈도우 생성 실패. 오류 코드: {error}")
-            return
-        
-        # 윈도우를 투명하게 설정 (약간 더 불투명하게 - 180)
-        windll.user32.SetLayeredWindowAttributes(self.hwnd, 0, 180, 2)  # LWA_ALPHA = 2
-        
-        # 항상 최상위로 설정
-        windll.user32.SetWindowPos(
-            self.hwnd, HWND_TOPMOST,
-            0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
-        )
+        try:
+            # 함수 원형 선언
+            CreateWindowExW = windll.user32.CreateWindowExW
+            CreateWindowExW.argtypes = [
+                ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+            ]
+            CreateWindowExW.restype = ctypes.c_void_p
+            
+            # 윈도우 생성
+            # 클릭 통과를 위한 WS_EX_TRANSPARENT 유지
+            self.hwnd = CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                "MosaicOverlayClass",
+                "Mosaic Overlay",
+                WS_POPUP | WS_VISIBLE,
+                0, 0, self.width, self.height,
+                None, None, self.wc.hInstance, None
+            )
+            
+            if not self.hwnd:
+                error = ctypes.GetLastError()
+                print(f"❌ 윈도우 생성 실패. 오류 코드: {error}")
+                return
+            
+            # 투명도 설정 - 150으로 설정하여 더 잘 보이게 함
+            windll.user32.SetLayeredWindowAttributes(self.hwnd, 0, 150, 2)  # LWA_ALPHA = 2
+            
+            # 항상 최상위로 설정
+            windll.user32.SetWindowPos(
+                self.hwnd, HWND_TOPMOST,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            )
+            
+            print(f"✅ 오버레이 윈도우 생성 완료: 핸들={self.hwnd}")
+        except Exception as e:
+            print(f"❌ 윈도우 생성 오류: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _render_thread_func(self):
         """렌더링 스레드 함수"""
         while not self.stop_event.is_set():
-            if self.shown:  # 항상 렌더링 (테스트 사각형 포함)
+            if self.shown:
+                print("🔄 렌더링 시도 중...")
                 self._render_overlay()
             time.sleep(self.render_interval)
     
@@ -166,12 +186,14 @@ class Win32OverlayWindow:
             # 디바이스 컨텍스트 가져오기
             hdc = windll.user32.GetDC(self.hwnd)
             if not hdc:
+                print("❌ 디바이스 컨텍스트 가져오기 실패")
                 return
             
             # 메모리 DC 생성
             mem_dc = windll.gdi32.CreateCompatibleDC(hdc)
             if not mem_dc:
                 windll.user32.ReleaseDC(self.hwnd, hdc)
+                print("❌ 메모리 DC 생성 실패")
                 return
             
             # 비트맵 생성
@@ -179,6 +201,7 @@ class Win32OverlayWindow:
             if not bitmap:
                 windll.gdi32.DeleteDC(mem_dc)
                 windll.user32.ReleaseDC(self.hwnd, hdc)
+                print("❌ 비트맵 생성 실패")
                 return
             
             old_bitmap = windll.gdi32.SelectObject(mem_dc, bitmap)
@@ -186,74 +209,101 @@ class Win32OverlayWindow:
             # 투명한 배경으로 초기화
             windll.gdi32.BitBlt(mem_dc, 0, 0, self.width, self.height, None, 0, 0, 0x42)  # BLACKNESS
             
-            # _render_overlay 함수에서 배경 초기화 후
+            # 테스트용 사각형 그리기 - 완전히 빨간색, 더 커서 더 잘 보임
             red_brush = windll.gdi32.CreateSolidBrush(0x0000FF)  # BGR 색상 (빨간색)
             windll.gdi32.SelectObject(mem_dc, red_brush)
-            # 화면 중앙에 큰 사각형 그리기
-            windll.gdi32.Rectangle(mem_dc, self.width//4, self.height//4, 
-                                self.width*3//4, self.height*3//4)
-            windll.gdi32.DeleteObject(red_brush)
-
-            # 테스트용 작은 사각형 그리기 (오버레이 창이 보이는지 확인용)
-            # 모서리에 작은 사각형 4개를 그려 창이 작동하는지 확인
-            red_brush = windll.gdi32.CreateSolidBrush(0x0000FF)  # BGR 색상 (빨간색)
-            windll.gdi32.SelectObject(mem_dc, red_brush)
-            windll.gdi32.Rectangle(mem_dc, 50, 50, 100, 100)  # 왼쪽 상단
-            windll.gdi32.Rectangle(mem_dc, self.width-100, 50, self.width-50, 100)  # 오른쪽 상단
-            windll.gdi32.Rectangle(mem_dc, 50, self.height-100, 100, self.height-50)  # 왼쪽 하단
-            windll.gdi32.Rectangle(mem_dc, self.width-100, self.height-100, self.width-50, self.height-50)  # 오른쪽 하단
+            
+            # 화면 전체에 큰 사각형 그리기
+            windll.gdi32.Rectangle(mem_dc, 100, 100, self.width-100, self.height-100)
+            
+            # 모서리에 작은 사각형 4개 그리기
+            windll.gdi32.Rectangle(mem_dc, 0, 0, 200, 200)  # 왼쪽 상단
+            windll.gdi32.Rectangle(mem_dc, self.width-200, 0, self.width, 200)  # 오른쪽 상단
+            windll.gdi32.Rectangle(mem_dc, 0, self.height-200, 200, self.height)  # 왼쪽 하단
+            windll.gdi32.Rectangle(mem_dc, self.width-200, self.height-200, self.width, self.height)  # 오른쪽 하단
+            
             windll.gdi32.DeleteObject(red_brush)
             
             # 모자이크 영역 그리기
-            for x, y, w, h, label, mosaic_img in self.mosaic_regions:
-                if mosaic_img is None:
-                    continue
-                    
-                try:
-                    # OpenCV 이미지를 Windows 비트맵으로 변환
-                    height, width = mosaic_img.shape[:2]
-                    
-                    # BGR to BGRA 변환
-                    bgra = cv2.cvtColor(mosaic_img, cv2.COLOR_BGR2BGRA)
-                    bgra[:, :, 3] = 255  # 알파 채널 설정
-                    
-                    # BITMAPINFO 구조체 생성
-                    class BITMAPINFOHEADER(ctypes.Structure):
-                        _fields_ = [
-                            ('biSize', ctypes.c_uint32),
-                            ('biWidth', ctypes.c_int32),
-                            ('biHeight', ctypes.c_int32),
-                            ('biPlanes', ctypes.c_uint16),
-                            ('biBitCount', ctypes.c_uint16),
-                            ('biCompression', ctypes.c_uint32),
-                            ('biSizeImage', ctypes.c_uint32),
-                            ('biXPelsPerMeter', ctypes.c_int32),
-                            ('biYPelsPerMeter', ctypes.c_int32),
-                            ('biClrUsed', ctypes.c_uint32),
-                            ('biClrImportant', ctypes.c_uint32)
-                        ]
-                    
-                    bmi = BITMAPINFOHEADER()
-                    bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-                    bmi.biWidth = width
-                    bmi.biHeight = -height  # 상하 반전
-                    bmi.biPlanes = 1
-                    bmi.biBitCount = 32
-                    bmi.biCompression = 0  # BI_RGB
-                    
-                    # 이미지 그리기를 위한 데이터 포인터 설정 (오버플로우 해결)
-                    data_ptr = bgra.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
-                    
-                    # 이미지 그리기
-                    windll.gdi32.SetDIBitsToDevice(
-                        mem_dc, x, y, width, height,
-                        0, 0, 0, height,
-                        data_ptr,
-                        byref(bmi),
-                        0  # DIB_RGB_COLORS
-                    )
-                except Exception as e:
-                    print(f"❌ 모자이크 그리기 오류: {e} @ ({x},{y},{w},{h})")
+            if self.mosaic_regions:
+                for x, y, w, h, label, mosaic_img in self.mosaic_regions:
+                    if mosaic_img is None:
+                        continue
+                        
+                    try:
+                        # OpenCV 이미지를 Windows 비트맵으로 변환
+                        height, width = mosaic_img.shape[:2]
+                        
+                        # BGR to BGRA 변환
+                        bgra = cv2.cvtColor(mosaic_img, cv2.COLOR_BGR2BGRA)
+                        bgra[:, :, 3] = 255  # 알파 채널 설정
+                        
+                        # BITMAPINFO 구조체 생성
+                        class BITMAPINFOHEADER(ctypes.Structure):
+                            _fields_ = [
+                                ('biSize', ctypes.c_uint32),
+                                ('biWidth', ctypes.c_int32),
+                                ('biHeight', ctypes.c_int32),
+                                ('biPlanes', ctypes.c_uint16),
+                                ('biBitCount', ctypes.c_uint16),
+                                ('biCompression', ctypes.c_uint32),
+                                ('biSizeImage', ctypes.c_uint32),
+                                ('biXPelsPerMeter', ctypes.c_int32),
+                                ('biYPelsPerMeter', ctypes.c_int32),
+                                ('biClrUsed', ctypes.c_uint32),
+                                ('biClrImportant', ctypes.c_uint32)
+                            ]
+                        
+                        bmi = BITMAPINFOHEADER()
+                        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                        bmi.biWidth = width
+                        bmi.biHeight = -height  # 상하 반전
+                        bmi.biPlanes = 1
+                        bmi.biBitCount = 32
+                        bmi.biCompression = 0  # BI_RGB
+                        
+                        # 이미지 그리기를 위한 데이터 포인터 설정 (오버플로우 해결)
+                        data_ptr = bgra.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+                        
+                        # 이미지 그리기
+                        windll.gdi32.SetDIBitsToDevice(
+                            mem_dc, x, y, width, height,
+                            0, 0, 0, height,
+                            data_ptr,
+                            byref(bmi),
+                            0  # DIB_RGB_COLORS
+                        )
+                    except Exception as e:
+                        print(f"❌ 모자이크 그리기 오류: {e} @ ({x},{y},{w},{h})")
+            else:
+                # 모자이크 영역이 없으면 테스트 사각형 표시
+                # 테스트 이미지 그리기 (중앙에 큰 빨간색 사각형)
+                test_size = 300
+                test_x = (self.width - test_size) // 2
+                test_y = (self.height - test_size) // 2
+                
+                # 테스트 이미지 준비
+                bgra_test = cv2.cvtColor(self.test_rect, cv2.COLOR_BGR2BGRA)
+                bgra_test[:, :, 3] = 255  # 알파 채널 설정
+                
+                # 비트맵 헤더 준비
+                bmi_test = BITMAPINFOHEADER()
+                bmi_test.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                bmi_test.biWidth = self.test_rect.shape[1]
+                bmi_test.biHeight = -self.test_rect.shape[0]  # 상하 반전
+                bmi_test.biPlanes = 1
+                bmi_test.biBitCount = 32
+                bmi_test.biCompression = 0  # BI_RGB
+                
+                # 이미지 그리기
+                data_ptr_test = bgra_test.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+                windll.gdi32.SetDIBitsToDevice(
+                    mem_dc, test_x, test_y, self.test_rect.shape[1], self.test_rect.shape[0],
+                    0, 0, 0, self.test_rect.shape[0],
+                    data_ptr_test,
+                    byref(bmi_test),
+                    0  # DIB_RGB_COLORS
+                )
             
             # BLENDFUNCTION 구조체 정의
             class BLENDFUNCTION(ctypes.Structure):
@@ -268,7 +318,7 @@ class Win32OverlayWindow:
             bf = BLENDFUNCTION()
             bf.BlendOp = AC_SRC_OVER
             bf.BlendFlags = 0
-            bf.SourceConstantAlpha = 180  # 투명도 조정
+            bf.SourceConstantAlpha = 175  # 투명도 조정 (0-255, 값이 낮을수록 더 투명)
             bf.AlphaFormat = AC_SRC_ALPHA
             
             # 투명 윈도우 업데이트
@@ -276,7 +326,15 @@ class Win32OverlayWindow:
             size = wintypes.SIZE(self.width, self.height)
             srcpos = wintypes.POINT(0, 0)
             
-            windll.user32.UpdateLayeredWindow(
+            # UpdateLayeredWindow 함수 정의
+            UpdateLayeredWindow = windll.user32.UpdateLayeredWindow
+            UpdateLayeredWindow.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(wintypes.POINT),
+                ctypes.POINTER(wintypes.SIZE), ctypes.c_void_p, ctypes.POINTER(wintypes.POINT),
+                ctypes.c_uint, ctypes.POINTER(BLENDFUNCTION), ctypes.c_uint
+            ]
+            
+            result = UpdateLayeredWindow(
                 self.hwnd,
                 hdc,
                 byref(pos),
@@ -287,6 +345,10 @@ class Win32OverlayWindow:
                 byref(bf),
                 ULW_ALPHA
             )
+            
+            if not result:
+                error = ctypes.GetLastError()
+                print(f"❌ UpdateLayeredWindow 실패. 오류 코드: {error}")
             
             # 리소스 정리
             windll.gdi32.SelectObject(mem_dc, old_bitmap)
@@ -312,6 +374,8 @@ class Win32OverlayWindow:
                 self.render_thread = threading.Thread(target=self._render_thread_func, daemon=True)
                 self.render_thread.start()
                 print("✅ 렌더링 스레드 시작됨")
+        else:
+            print("❌ 윈도우 핸들이 없습니다")
     
     def hide(self):
         """오버레이 창 숨기기"""
@@ -336,15 +400,19 @@ class Win32OverlayWindow:
             
             self.frame_count += 1
             
-            # 모자이크 영역 강조를 위해 테두리 추가
+            # 완전히 빨간색으로 채운 모자이크 이미지로 변경
             enhanced_regions = []
             for x, y, w, h, label, mosaic_img in mosaic_regions:
                 if mosaic_img is not None:
-                    # 모자이크 이미지에 빨간색 테두리 추가 (더 잘 보이게)
-                    cv2.rectangle(mosaic_img, (0, 0), (w-1, h-1), (0, 0, 255), 3)
-                    # 필요시 텍스트 추가
-                    cv2.putText(mosaic_img, label, (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    enhanced_regions.append((x, y, w, h, label, mosaic_img))
+                    # 빨간색으로 채운 이미지 생성
+                    red_img = np.zeros((h, w, 3), dtype=np.uint8)
+                    red_img[:, :] = [0, 0, 255]  # BGR 형식 - 빨간색
+                    
+                    # 테두리와 텍스트 추가
+                    cv2.rectangle(red_img, (0, 0), (w-1, h-1), (255, 255, 255), 2)  # 흰색 테두리
+                    cv2.putText(red_img, label, (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
+                    enhanced_regions.append((x, y, w, h, label, red_img))
                 else:
                     enhanced_regions.append((x, y, w, h, label, None))
             
@@ -354,12 +422,9 @@ class Win32OverlayWindow:
             
             # 로그 출력 및 모자이크 영역 수 출력 추가
             if len(mosaic_regions) > 0:
-                if self.frame_count % 100 == 0:
+                if self.frame_count % 30 == 0:  # 더 자주 출력
                     print(f"✅ 모자이크 영역 {len(mosaic_regions)}개 처리 중 (프레임 #{self.frame_count})")
                     self._save_debug_image()
-                # 로그 빈도 조절
-                elif self.frame_count % 30 == 0:
-                    print(f"✅ 현재 모자이크 영역: {len(mosaic_regions)}개")
         
         except Exception as e:
             print(f"❌ 오버레이 업데이트 실패: {e}")
@@ -380,8 +445,8 @@ class Win32OverlayWindow:
             debug_image = self.original_image.copy()
             for x, y, w, h, label, _ in self.mosaic_regions:
                 # 원본 이미지에 박스 표시
-                cv2.rectangle(debug_image, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                cv2.putText(debug_image, label, (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                cv2.rectangle(debug_image, (x, y), (x+w, y+h), (0, 0, 255), 2)  # 빨간색으로 변경
+                cv2.putText(debug_image, label, (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             
             # 이미지 저장
             debug_path = f"{self.debug_dir}/overlay_win32_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
@@ -395,4 +460,3 @@ class Win32OverlayWindow:
         self.hide()
         if self.hwnd:
             windll.user32.DestroyWindow(self.hwnd)
-
