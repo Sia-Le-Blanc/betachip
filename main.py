@@ -1,7 +1,6 @@
 import os
 import sys
 import cv2
-import torch
 import time
 import threading
 import queue
@@ -14,7 +13,7 @@ from PyQt5.QtCore import QThread, pyqtSignal, QTimer, QElapsedTimer, QT_VERSION_
 
 from gui_korean import GUIController as MainWindow
 from mss_capture import ScreenCapturer
-from mosaic_processor import MosaicProcessor
+from mosaic_processor_simplified import MosaicProcessor  # 수정된 모자이크 프로세서 사용
 
 class ParallelProcessingPipeline:
     def __init__(self, capturer, processor, renderer):
@@ -23,8 +22,8 @@ class ParallelProcessingPipeline:
         self.renderer = renderer
         
         # 각 단계 간 큐
-        self.capture_to_detect = queue.Queue(maxsize=1)
-        self.detect_to_render = queue.Queue(maxsize=1)
+        self.capture_to_detect = queue.Queue(maxsize=2)  # 큐 크기 증가
+        self.detect_to_render = queue.Queue(maxsize=2)
         
         # 스레드
         self.capture_thread = None
@@ -196,13 +195,16 @@ class ParallelProcessingPipeline:
                     pass
             else:
                 # Windows
-                import win32api
-                import win32process
-                import win32con
-                win32process.SetThreadPriority(
-                    win32api.GetCurrentThread(),
-                    win32con.THREAD_PRIORITY_HIGHEST
-                )
+                try:
+                    import win32api
+                    import win32process
+                    import win32con
+                    win32process.SetThreadPriority(
+                        win32api.GetCurrentThread(),
+                        win32con.THREAD_PRIORITY_HIGHEST
+                    )
+                except ImportError:
+                    print("⚠️ win32api 모듈을 찾을 수 없습니다. 스레드 우선순위 설정을 건너뜁니다.")
         except Exception as e:
             print(f"⚠️ 스레드 우선순위 설정 실패: {e}")
             
@@ -228,6 +230,7 @@ def check_gpu_availability():
     
     # CUDA 가용성 확인
     try:
+        import torch
         if torch.cuda.is_available():
             gpu_available = True
             gpu_info = f"CUDA GPU: {torch.cuda.get_device_name(0)}"
@@ -240,14 +243,11 @@ def check_gpu_availability():
     try:
         import ctypes
         from ctypes import windll
-        if hasattr(windll, 'dxgi') and windll.dxgi.CreateDXGIFactory != None:  # DirectX 사용 가능 여부
-            # 간단한 DirectX 기능 테스트
-            result = windll.d3d11.D3D11CreateDevice(None, 0, None, 0, None, 0, None, None, None)
-            if result == 0:  # 성공
-                gpu_available = True
-                gpu_info = "DirectX GPU 가속 가능"
-                print(f"✅ {gpu_info} 감지됨")
-                return gpu_available, "directx", gpu_info
+        if hasattr(windll, 'dxgi'):
+            gpu_available = True
+            gpu_info = "DirectX GPU 가속 가능"
+            print(f"✅ {gpu_info} 감지됨")
+            return gpu_available, "directx", gpu_info
     except Exception as e:
         print(f"DirectX 확인 중 오류: {e}")
     
@@ -261,6 +261,8 @@ if __name__ == "__main__":
         parser.add_argument('--debug', action='store_true', help='디버깅 모드 활성화')
         parser.add_argument('--force-cpu', action='store_true', help='CPU 모드 강제 사용')
         parser.add_argument('--speed', action='store_true', help='속도 우선 모드 (품질 저하)')
+        parser.add_argument('--overlay', choices=['win32', 'cv2'], default='cv2', 
+                           help='오버레이 방식 선택 (win32, cv2)')
         args = parser.parse_args()
 
         from PyQt5.QtCore import QT_VERSION_STR
@@ -278,21 +280,29 @@ if __name__ == "__main__":
         app = QApplication(sys.argv)
         window = MainWindow()
         
-        # 렌더 모드에 따라 적절한 오버레이 생성
-        if render_mode == "directx":
-            from directx_overlay_window import DirectXOverlayWindow
-            overlay = DirectXOverlayWindow()
-        elif render_mode == "cuda":
-            from cuda_overlay_window import CudaOverlayWindow
-            overlay = CudaOverlayWindow()
-        else:  # CPU 모드
-            # Win32 오버레이 사용
-            from win32_overlay_window import Win32OverlayWindow
-            overlay = Win32OverlayWindow()
-            print("✅ Win32OverlayWindow 사용 중")
+        # 오버레이 방식 선택
+        overlay = None
+        if args.overlay == 'win32':
+            try:
+                from win32_overlay_extra_simple import Win32OverlayWindow
+                overlay = Win32OverlayWindow()
+                print("✅ 단순화된 Win32 오버레이 사용 중")
+            except Exception as e:
+                print(f"❌ Win32OverlayWindow 초기화 실패: {e}")
+                args.overlay = 'cv2'  # 대체 방식으로 전환
+        
+        if args.overlay == 'cv2' or overlay is None:
+            try:
+                from cv2_overlay_window import CV2OverlayWindow
+                overlay = CV2OverlayWindow()
+                print("✅ OpenCV 기반 오버레이 사용 중")
+            except Exception as e:
+                print(f"❌ CV2OverlayWindow 초기화 실패: {e}")
+                sys.exit(1)
+        
         # UI에 현재 모드 표시
         if hasattr(window, 'set_render_mode_info'):
-            window.set_render_mode_info(gpu_info)
+            window.set_render_mode_info(f"{gpu_info} | {args.overlay} 오버레이")
         
         # 컴포넌트 초기화
         capturer = ScreenCapturer(debug_mode=args.debug)
@@ -302,8 +312,8 @@ if __name__ == "__main__":
             print("⚡️ 속도 우선 모드 활성화 (품질 저하)")
             capturer.capture_downscale = 0.75  # 캡처 해상도 축소
         
-        # 검열 모델 초기화
-        processor = MosaicProcessor("resources/best_weights_only.pt")
+        # 검열 모델 초기화 (model_path는 실제로 사용하지 않음)
+        processor = MosaicProcessor(model_path="resources/dummy.pt")
         
         # 병렬 파이프라인 설정
         pipeline = ParallelProcessingPipeline(capturer, processor, overlay)
@@ -313,6 +323,13 @@ if __name__ == "__main__":
             processor.targets = window.get_selected_targets()
             processor.strength = window.get_strength()
             print(f"🔄 모자이크 파라미터 업데이트: 대상={processor.targets}, 강도={processor.strength}")
+            
+            # 테스트 영역 업데이트 (GUI에서 선택한 대상에 맞게 테스트 영역 설정)
+            processor.test_regions = [
+                (100, 100, 200, 200, processor.targets[0] if processor.targets else "테스트1"),
+                (400, 300, 150, 150, processor.targets[1] if len(processor.targets) > 1 else "테스트2"),
+                (700, 200, 180, 180, processor.targets[2] if len(processor.targets) > 2 else "테스트3")
+            ]
             
             # 오버레이 표시
             overlay.show()
@@ -336,6 +353,6 @@ if __name__ == "__main__":
         sys.exit(app.exec_())
 
     except Exception as e:
-        print(f"❌ 에프 시작 오류: {e}")
+        print(f"❌ 프로그램 시작 오류: {e}")
         import traceback
         traceback.print_exc()
