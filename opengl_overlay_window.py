@@ -61,8 +61,31 @@ class OpenGLOverlayWindow:
             pygame.display.set_caption("Mosaic Overlay")
             
             flags = DOUBLEBUF | OPENGL | NOFRAME  # 테두리 없는 창
+
             screen = pygame.display.set_mode((self.width, self.height), flags)
             
+            try:
+                import win32gui
+                import win32con
+                import win32api
+                
+                # 윈도우 핸들 가져오기
+                HWND = pygame.display.get_wm_info()['window']
+                
+                # 윈도우 스타일 설정
+                ex_style = win32gui.GetWindowLong(HWND, win32con.GWL_EXSTYLE)
+                win32gui.SetWindowLong(HWND, win32con.GWL_EXSTYLE, 
+                                    ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
+                
+                # 윈도우 투명도 설정
+                win32gui.SetLayeredWindowAttributes(HWND, 0, 255, win32con.LWA_COLORKEY)
+                
+                # 클릭 통과를 위한 설정
+                win32gui.SetWindowPos(HWND, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+            except Exception as e:
+                print(f"⚠️ 윈도우 투명 설정 실패: {e}")
+
             # OpenGL 설정
             glViewport(0, 0, self.width, self.height)
             glMatrixMode(GL_PROJECTION)

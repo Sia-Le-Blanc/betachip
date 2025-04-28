@@ -13,7 +13,7 @@ from PyQt5.QtCore import QThread, pyqtSignal, QTimer, QElapsedTimer, QT_VERSION_
 
 from gui_korean import GUIController as MainWindow
 from mss_capture import ScreenCapturer
-from mosaic_processor_simplified import MosaicProcessor  # 수정된 모자이크 프로세서 사용
+from mosaic_processor import MosaicProcessor  # 수정된 모자이크 프로세서 사용
 
 class ParallelProcessingPipeline:
     def __init__(self, capturer, processor, renderer):
@@ -261,8 +261,8 @@ if __name__ == "__main__":
         parser.add_argument('--debug', action='store_true', help='디버깅 모드 활성화')
         parser.add_argument('--force-cpu', action='store_true', help='CPU 모드 강제 사용')
         parser.add_argument('--speed', action='store_true', help='속도 우선 모드 (품질 저하)')
-        parser.add_argument('--overlay', choices=['win32', 'cv2'], default='cv2', 
-                           help='오버레이 방식 선택 (win32, cv2)')
+        parser.add_argument('--overlay', choices=['win32', 'cv2', 'opengl'], default='cv2', 
+                   help='오버레이 방식 선택 (win32, cv2, opengl)')                      
         args = parser.parse_args()
 
         from PyQt5.QtCore import QT_VERSION_STR
@@ -299,7 +299,16 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"❌ CV2OverlayWindow 초기화 실패: {e}")
                 sys.exit(1)
-        
+
+        if args.overlay == 'opengl':
+            try:
+                from opengl_overlay_window import OpenGLOverlayWindow
+                overlay = OpenGLOverlayWindow()
+                print("✅ OpenGL/PyGame 기반 오버레이 사용 중")
+            except Exception as e:
+                print(f"❌ OpenGLOverlayWindow 초기화 실패: {e}")
+                args.overlay = 'cv2'  # 대체 방식으로 전환
+                
         # UI에 현재 모드 표시
         if hasattr(window, 'set_render_mode_info'):
             window.set_render_mode_info(f"{gpu_info} | {args.overlay} 오버레이")
