@@ -1,0 +1,39 @@
+# Python 일반
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.log
+
+# 바이너리 및 빌드 파일
+*.exe
+*.dll
+*.pyd
+*.pdb
+*.obj
+*.lib
+
+# 프로젝트 빌드 디렉토리
+dist/
+build/
+Output/
+bin/
+obj/
+
+# VSCode/IDE 설정
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Nuitka, PyInstaller, 기타 빌드툴 생성물
+*.spec
+*.manifest
+*.dep
+*.exp
+
+# 기타
+.DS_Store
+Thumbs.db
+*.onnx
+*.pt

@@ -1,0 +1,7 @@
+numpy
+opencv-python
+pygame
+mss
+ultralytics
+onnxruntime
+pywin32
