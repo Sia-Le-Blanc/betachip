@@ -8,12 +8,10 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using OpenCvSharp;
+using OpenCvSharp.Extensions;
 
 namespace MosaicCensorSystem.Overlay
 {
-    /// <summary>
-    /// 풀스크린 + 캡처 방지 + 클릭 투과 모자이크 오버레이 윈도우
-    /// </summary>
     public class FullscreenOverlay : Form, IOverlay
     {
         #region Windows API
@@ -29,8 +27,6 @@ namespace MosaicCensorSystem.Overlay
         private const int SWP_NOACTIVATE = 0x0010;
         private const int SWP_SHOWWINDOW = 0x0040;
         private const int WDA_EXCLUDEFROMCAPTURE = 0x00000011;
-
-        // Windows Hook 상수
         private const int WH_CBT = 5;
         private const int HCBT_ACTIVATE = 5;
 
@@ -73,34 +69,28 @@ namespace MosaicCensorSystem.Overlay
         private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
         #endregion
 
-        // 설정
         private readonly Dictionary<string, object> config;
         public bool ShowDebugInfo { get; set; }
         private int fpsLimit = 30;
 
-        // 상태 변수
         private bool isVisible = false;
         private bool isRunning = false;
         private Mat currentFrame = null;
 
-        // 성능 통계
         private int fpsCounter = 0;
         private DateTime fpsStartTime = DateTime.Now;
         private double currentFps = 0;
 
-        // 스레드 관련
         private Thread displayThread;
         private Thread topmostThread;
         private readonly object frameLock = new object();
         private readonly CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
         private bool forceTopmost = false;
 
-        // Windows Hook
         private IntPtr hookHandle = IntPtr.Zero;
         private HookProc hookCallback;
         private bool hookInstalled = false;
 
-        // Graphics
         private BufferedGraphicsContext graphicsContext;
         private BufferedGraphics bufferedGraphics;
         private Font debugFont;
@@ -118,33 +108,27 @@ namespace MosaicCensorSystem.Overlay
 
         private void InitializeForm()
         {
-            // 폼 기본 설정
             Text = "Mosaic Fullscreen - Click Through Protected";
             FormBorderStyle = FormBorderStyle.None;
             WindowState = FormWindowState.Maximized;
             ShowInTaskbar = false;
             TopMost = true;
             
-            // 전체 화면 크기
             var screen = Screen.PrimaryScreen;
             Bounds = screen.Bounds;
 
-            // 더블 버퍼링 활성화
             SetStyle(ControlStyles.AllPaintingInWmPaint | 
                     ControlStyles.UserPaint | 
                     ControlStyles.DoubleBuffer | 
                     ControlStyles.ResizeRedraw, true);
 
-            // Graphics 컨텍스트 초기화
             graphicsContext = BufferedGraphicsManager.Current;
             
-            // 디버그 폰트
             if (ShowDebugInfo)
             {
                 debugFont = new Font("Arial", 12);
             }
 
-            // 키 이벤트 핸들러
             KeyDown += OnKeyDown;
         }
 
@@ -171,16 +155,12 @@ namespace MosaicCensorSystem.Overlay
 
             try
             {
-                // 윈도우 표시
                 base.Show();
-                
-                // Windows 스타일 설정
                 SetWindowClickThroughAndCaptureProtected();
 
                 isVisible = true;
                 isRunning = true;
 
-                // 디스플레이 스레드 시작
                 displayThread = new Thread(DisplayLoop)
                 {
                     Name = "OverlayDisplayThread",
@@ -191,7 +171,6 @@ namespace MosaicCensorSystem.Overlay
                 Console.WriteLine("✅ 풀스크린 캡처 방지 + 클릭 투과 오버레이 표시됨");
                 Console.WriteLine("💡 ESC 키를 누르면 종료됩니다");
                 Console.WriteLine("💡 바탕화면을 자유롭게 클릭/드래그할 수 있습니다");
-                Console.WriteLine("📌 pygame 창이 항상 최상단에 고정됩니다");
 
                 return true;
             }
@@ -209,7 +188,6 @@ namespace MosaicCensorSystem.Overlay
                 IntPtr hwnd = Handle;
                 Console.WriteLine($"🔍 윈도우 핸들 획득: {hwnd}");
 
-                // 1단계: 캡처에서 완전 제외 (피드백 루프 방지)
                 try
                 {
                     bool result = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
@@ -227,19 +205,15 @@ namespace MosaicCensorSystem.Overlay
                     Console.WriteLine($"⚠️ 캡처 방지 설정 오류: {e.Message}");
                 }
 
-                // 2단계: 클릭 투과 설정
                 try
                 {
                     int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
                     Console.WriteLine($"🔍 현재 Extended Style: 0x{exStyle:X8}");
 
-                    // 클릭 투과 및 레이어드 윈도우 스타일 추가
                     int newExStyle = exStyle | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW;
                     Console.WriteLine($"🔍 새로운 Extended Style: 0x{newExStyle:X8}");
 
                     SetWindowLong(hwnd, GWL_EXSTYLE, newExStyle);
-                    
-                    // 완전 불투명 설정
                     SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
                     
                     Console.WriteLine("🖱️ 클릭 투과 설정 성공! (마우스 클릭이 바탕화면으로 전달됩니다)");
@@ -249,12 +223,10 @@ namespace MosaicCensorSystem.Overlay
                     Console.WriteLine($"⚠️ 클릭 투과 설정 오류: {e.Message}");
                 }
 
-                // 3단계: 창을 최상단으로 설정
                 SetWindowPos(hwnd, new IntPtr(HWND_TOPMOST), 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 Console.WriteLine("✅ 최상단 설정 완료");
 
-                // 4단계: 클릭 투과 테스트
                 if (TestClickThroughImmediately())
                 {
                     Console.WriteLine("✅ 클릭 투과 즉시 테스트 성공!");
@@ -266,13 +238,8 @@ namespace MosaicCensorSystem.Overlay
                     RetryClickThroughSetup();
                 }
 
-                // 5단계: 강제 최상단 모드 활성화
                 forceTopmost = true;
-
-                // 6단계: Windows Hook 설치
                 InstallActivationHook();
-
-                // 7단계: 지속적인 최상단 유지 스레드 시작
                 StartTopmostKeeper();
 
                 Console.WriteLine("🎉 풀스크린이 캡처 방지 + 클릭 투과로 설정되었습니다!");
@@ -290,17 +257,14 @@ namespace MosaicCensorSystem.Overlay
                 IntPtr hwnd = Handle;
                 int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
                 
-                // 기존 스타일 제거 후 다시 설정
                 int cleanStyle = exStyle & ~(WS_EX_LAYERED | WS_EX_TRANSPARENT);
                 SetWindowLong(hwnd, GWL_EXSTYLE, cleanStyle);
                 
                 Thread.Sleep(100);
                 
-                // 다시 클릭 투과 스타일 적용
                 int newStyle = cleanStyle | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW;
                 SetWindowLong(hwnd, GWL_EXSTYLE, newStyle);
                 
-                // 레이어드 윈도우 속성 재설정
                 SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
             }
             catch (Exception e)
@@ -427,7 +391,7 @@ namespace MosaicCensorSystem.Overlay
                             ForceToTopmost();
                         }
                         
-                        Thread.Sleep(50); // 0.05초 간격
+                        Thread.Sleep(50);
                     }
                     catch
                     {
@@ -446,7 +410,6 @@ namespace MosaicCensorSystem.Overlay
             {
                 IntPtr hwnd = Handle;
                 
-                // 여러 방법으로 최상단 강제
                 SetWindowPos(hwnd, new IntPtr(HWND_TOPMOST), 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 
@@ -466,10 +429,8 @@ namespace MosaicCensorSystem.Overlay
             isRunning = false;
             forceTopmost = false;
 
-            // Windows Hook 제거
             UninstallActivationHook();
 
-            // 스레드 종료 대기
             cancellationTokenSource.Cancel();
             
             if (displayThread?.IsAlive == true)
@@ -482,7 +443,6 @@ namespace MosaicCensorSystem.Overlay
                 topmostThread.Join(1000);
             }
 
-            // 폼 닫기
             if (InvokeRequired)
             {
                 Invoke(new Action(() => base.Hide()));
@@ -514,7 +474,6 @@ namespace MosaicCensorSystem.Overlay
                 {
                     try
                     {
-                        // 화면 그리기
                         if (InvokeRequired)
                         {
                             Invoke(new Action(() => Invalidate()));
@@ -525,8 +484,6 @@ namespace MosaicCensorSystem.Overlay
                         }
 
                         UpdateFps();
-
-                        // FPS 제한
                         Thread.Sleep(1000 / fpsLimit);
                     }
                     catch (Exception e)
@@ -548,21 +505,18 @@ namespace MosaicCensorSystem.Overlay
             g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
             g.CompositingQuality = CompositingQuality.HighSpeed;
 
-            // 버퍼 그래픽스 생성
             bufferedGraphics = graphicsContext.Allocate(g, DisplayRectangle);
             var bufferGraphics = bufferedGraphics.Graphics;
 
-            // 배경을 검은색으로
             bufferGraphics.Clear(Color.Black);
 
-            // 현재 프레임 그리기
             lock (frameLock)
             {
                 if (currentFrame != null && !currentFrame.Empty())
                 {
                     try
                     {
-                        using (var bitmap = MatToBitmap(currentFrame))
+                        using (var bitmap = BitmapConverter.ToBitmap(currentFrame))
                         {
                             bufferGraphics.DrawImage(bitmap, 0, 0, Width, Height);
                         }
@@ -574,13 +528,11 @@ namespace MosaicCensorSystem.Overlay
                 }
             }
 
-            // 디버그 정보 그리기
             if (ShowDebugInfo && debugFont != null)
             {
                 DrawDebugInfo(bufferGraphics);
             }
 
-            // 버퍼를 화면에 그리기
             bufferedGraphics.Render(g);
             bufferedGraphics.Dispose();
         }
@@ -594,35 +546,30 @@ namespace MosaicCensorSystem.Overlay
                 {
                     int y = 10;
                     
-                    // FPS
                     string fpsText = $"FPS: {currentFps:F1}";
                     var fpsSize = g.MeasureString(fpsText, debugFont);
                     g.FillRectangle(bgBrush, 10, y, fpsSize.Width, fpsSize.Height);
                     g.DrawString(fpsText, debugFont, brush, 10, y);
                     y += 30;
 
-                    // 해상도
                     string resText = $"Resolution: {Width}x{Height}";
                     var resSize = g.MeasureString(resText, debugFont);
                     g.FillRectangle(bgBrush, 10, y, resSize.Width, resSize.Height);
                     g.DrawString(resText, debugFont, brush, 10, y);
                     y += 30;
 
-                    // 상태
                     string statusText = "🛡️ PROTECTED + CLICK THROUGH + HOOK GUARD";
                     var statusSize = g.MeasureString(statusText, debugFont);
                     g.FillRectangle(bgBrush, 10, y, statusSize.Width, statusSize.Height);
                     g.DrawString(statusText, debugFont, Brushes.LightGreen, 10, y);
                     y += 30;
 
-                    // Hook 상태
                     string hookText = hookInstalled ? "Hook: ACTIVE" : "Hook: INACTIVE";
                     var hookSize = g.MeasureString(hookText, debugFont);
                     g.FillRectangle(bgBrush, 10, y, hookSize.Width, hookSize.Height);
                     g.DrawString(hookText, debugFont, Brushes.Yellow, 10, y);
                     y += 30;
 
-                    // 안내
                     string guideText = "Click anything! ZERO flickering guaranteed!";
                     var guideSize = g.MeasureString(guideText, debugFont);
                     g.FillRectangle(bgBrush, 10, y, guideSize.Width, guideSize.Height);
@@ -729,49 +676,6 @@ namespace MosaicCensorSystem.Overlay
             bufferedGraphics?.Dispose();
             debugFont?.Dispose();
             cancellationTokenSource?.Dispose();
-        }
-
-        // BitmapConverter.ToBitmap의 대체 구현
-        private Bitmap MatToBitmap(Mat mat)
-        {
-            if (mat.Type() != MatType.CV_8UC3)
-            {
-                throw new ArgumentException("Only CV_8UC3 type is supported");
-            }
-
-            Bitmap bitmap = new Bitmap(mat.Width, mat.Height, PixelFormat.Format24bppRgb);
-            BitmapData bmpData = bitmap.LockBits(
-                new Rectangle(0, 0, bitmap.Width, bitmap.Height),
-                ImageLockMode.WriteOnly,
-                bitmap.PixelFormat);
-
-            try
-            {
-                unsafe
-                {
-                    byte* src = (byte*)mat.DataPointer;
-                    byte* dst = (byte*)bmpData.Scan0.ToPointer();
-                    
-                    for (int y = 0; y < mat.Height; y++)
-                    {
-                        for (int x = 0; x < mat.Width; x++)
-                        {
-                            int srcIdx = (y * mat.Width + x) * 3;
-                            int dstIdx = y * bmpData.Stride + x * 3;
-                            
-                            // BGR 순서 유지
-                            dst[dstIdx] = src[srcIdx];         // B
-                            dst[dstIdx + 1] = src[srcIdx + 1]; // G
-                            dst[dstIdx + 2] = src[srcIdx + 2]; // R
-                        }
-                    }
-                }
-                return bitmap;
-            }
-            finally
-            {
-                bitmap.UnlockBits(bmpData);
-            }
         }
     }
 }

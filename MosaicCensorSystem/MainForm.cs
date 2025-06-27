@@ -13,20 +13,14 @@ using MosaicCensorSystem.UI;
 
 namespace MosaicCensorSystem
 {
-    /// <summary>
-    /// 풀스크린 + 캡처 방지 실시간 화면 검열 애플리케이션
-    /// </summary>
     public class MosaicApp
     {
-        // 메인 윈도우
         public Form Root { get; private set; }
         
-        // 컴포넌트
         private ScreenCapturer capturer;
         private MosaicProcessor processor;
         private FullscreenOverlay overlay;
         
-        // UI 컴포넌트
         private ScrollablePanel scrollableContainer;
         private Label statusLabel;
         private Dictionary<string, CheckBox> targetCheckBoxes = new Dictionary<string, CheckBox>();
@@ -43,12 +37,10 @@ namespace MosaicCensorSystem
         private Button startButton;
         private Button stopButton;
         
-        // 상태 변수
         private bool isRunning = false;
         private Thread processThread;
         private bool debugMode = false;
         
-        // 통계 변수
         private Dictionary<string, object> stats = new Dictionary<string, object>
         {
             ["frames_processed"] = 0,
@@ -57,13 +49,11 @@ namespace MosaicCensorSystem
             ["start_time"] = null
         };
         
-        // 드래그 관련
         private bool isDragging = false;
         private System.Drawing.Point dragStartPoint;
 
         public MosaicApp()
         {
-            // 메인 윈도우 생성
             Root = new Form
             {
                 Text = "실시간 화면 검열 시스템 v3.0 (풀스크린 + 캡처 방지)",
@@ -72,15 +62,12 @@ namespace MosaicCensorSystem
                 StartPosition = FormStartPosition.CenterScreen
             };
             
-            // 컴포넌트 초기화
             capturer = new ScreenCapturer(Config.GetSection("capture"));
             processor = new MosaicProcessor(null, Config.GetSection("mosaic"));
             overlay = new FullscreenOverlay(Config.GetSection("overlay"));
             
-            // GUI 생성
             CreateGui();
             
-            // 디버그 디렉토리 생성
             if (debugMode)
             {
                 Directory.CreateDirectory("debug_detection");
@@ -89,7 +76,6 @@ namespace MosaicCensorSystem
 
         private void CreateGui()
         {
-            // 제목 (드래그 가능) - 고정 영역
             var titleLabel = new Label
             {
                 Text = "🛡️ 풀스크린 화면 검열 시스템",
@@ -102,10 +88,8 @@ namespace MosaicCensorSystem
                 Dock = DockStyle.Top
             };
             
-            // 제목 라벨에 드래그 기능 바인딩
             SetupWindowDragging(titleLabel);
             
-            // 스크롤 안내 - 고정 영역
             var scrollInfo = new Label
             {
                 Text = "📜 마우스 휠로 스크롤하여 모든 설정을 확인하세요",
@@ -117,18 +101,15 @@ namespace MosaicCensorSystem
                 Dock = DockStyle.Top
             };
             
-            // 스크롤 가능한 메인 영역
             scrollableContainer = new ScrollablePanel
             {
                 Dock = DockStyle.Fill
             };
             
-            // 컨트롤 추가 (아래서부터)
             Root.Controls.Add(scrollableContainer);
             Root.Controls.Add(scrollInfo);
             Root.Controls.Add(titleLabel);
             
-            // 실제 내용을 스크롤 가능한 프레임에 추가
             CreateContent(scrollableContainer.ScrollableFrame);
         }
 
@@ -162,7 +143,6 @@ namespace MosaicCensorSystem
         {
             int y = 10;
             
-            // 드래그 안내
             var dragInfo = new Label
             {
                 Text = "💡 파란색 제목을 드래그해서 창을 이동하세요",
@@ -174,7 +154,6 @@ namespace MosaicCensorSystem
             parent.Controls.Add(dragInfo);
             y += 30;
             
-            // 상태 표시
             statusLabel = new Label
             {
                 Text = "⭕ 대기 중",
@@ -186,7 +165,6 @@ namespace MosaicCensorSystem
             parent.Controls.Add(statusLabel);
             y += 40;
             
-            // 개선 안내
             var infoGroup = new GroupBox
             {
                 Text = "🚀 최종 완성 버전!",
@@ -212,7 +190,6 @@ namespace MosaicCensorSystem
             parent.Controls.Add(infoGroup);
             y += 140;
             
-            // 중요 안내
             var warningGroup = new GroupBox
             {
                 Text = "⚠️ 중요 안내",
@@ -235,7 +212,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             parent.Controls.Add(warningGroup);
             y += 90;
             
-            // 모자이크 대상 선택
             var targetsGroup = new GroupBox
             {
                 Text = "🎯 모자이크 대상 선택",
@@ -252,7 +228,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             var defaultTargets = Config.Get<List<string>>("mosaic", "default_targets", new List<string>());
             
-            // 2열로 배치
             for (int i = 0; i < availableTargets.Length; i++)
             {
                 var target = availableTargets[i];
@@ -273,7 +248,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             parent.Controls.Add(targetsGroup);
             y += 190;
             
-            // 모자이크 설정
             var settingsGroup = new GroupBox
             {
                 Text = "⚙️ 모자이크 설정",
@@ -281,7 +255,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 Size = new System.Drawing.Size(460, 150)
             };
             
-            // 모자이크 강도
             var strengthTextLabel = new Label
             {
                 Text = "모자이크 강도:",
@@ -310,7 +283,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             };
             settingsGroup.Controls.Add(strengthLabel);
             
-            // 신뢰도 임계값
             var confidenceTextLabel = new Label
             {
                 Text = "감지 신뢰도:",
@@ -339,7 +311,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             };
             settingsGroup.Controls.Add(confidenceLabel);
             
-            // FPS 제한
             var fpsTextLabel = new Label
             {
                 Text = "FPS 제한:",
@@ -371,7 +342,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             parent.Controls.Add(settingsGroup);
             y += 160;
             
-            // 컨트롤 버튼
             var controlPanel = new Panel
             {
                 BackColor = Color.LightGray,
@@ -419,7 +389,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             parent.Controls.Add(controlPanel);
             y += 110;
             
-            // 통계 표시
             var statsGroup = new GroupBox
             {
                 Text = "📊 실시간 통계",
@@ -460,7 +429,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             parent.Controls.Add(statsGroup);
             y += 110;
             
-            // 로그 표시
             var logGroup = new GroupBox
             {
                 Text = "📝 실시간 로그",
@@ -480,7 +448,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             parent.Controls.Add(logGroup);
             y += 110;
             
-            // 디버그 설정
             var debugGroup = new GroupBox
             {
                 Text = "🐛 디버그 옵션",
@@ -506,7 +473,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             parent.Controls.Add(debugGroup);
             y += 70;
             
-            // 스크롤 테스트 확인
             var testGroup = new GroupBox
             {
                 Text = "✅ 스크롤 테스트",
@@ -547,7 +513,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
             var fullMessage = $"[{timestamp}] {message}";
             
-            // GUI 로그
             if (Root.InvokeRequired)
             {
                 Root.Invoke(new Action(() =>
@@ -564,7 +529,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 logTextBox.ScrollToCaret();
             }
             
-            // 콘솔 로그
             Console.WriteLine(fullMessage);
         }
 
@@ -594,7 +558,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             if (isRunning)
                 return;
             
-            // 선택된 타겟 확인
             var selectedTargets = new List<string>();
             foreach (var kvp in targetCheckBoxes)
             {
@@ -609,7 +572,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 return;
             }
             
-            // 최종 확인
             var result = MessageBox.Show(
                 "화면 검열 시스템을 시작하시겠습니까?\n\n" +
                 "• 전체 화면에 모자이크가 적용됩니다\n" +
@@ -623,30 +585,25 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             if (result != DialogResult.Yes)
                 return;
             
-            // 설정 적용
             processor.SetTargets(selectedTargets);
             processor.SetStrength(strengthSlider.Value);
             processor.ConfThreshold = confidenceSlider.Value / 10.0f;
             debugMode = debugCheckBox.Checked;
             
-            // 오버레이 설정
             overlay.ShowDebugInfo = showDebugInfoCheckBox.Checked;
             overlay.SetFpsLimit(fpsSlider.Value);
             
-            // 상태 변경
             isRunning = true;
             stats["start_time"] = DateTime.Now;
             stats["frames_processed"] = 0;
             stats["objects_detected"] = 0;
             stats["mosaic_applied"] = 0;
             
-            // GUI 업데이트
             statusLabel.Text = "✅ 풀스크린 검열 중";
             statusLabel.ForeColor = Color.Green;
             startButton.Enabled = false;
             stopButton.Enabled = true;
             
-            // 풀스크린 오버레이 표시
             if (!overlay.Show())
             {
                 LogMessage("❌ 풀스크린 오버레이 시작 실패");
@@ -654,7 +611,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 return;
             }
             
-            // 처리 스레드 시작
             processThread = new Thread(ProcessingLoop)
             {
                 Name = "ProcessingThread",
@@ -662,11 +618,9 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             };
             processThread.Start();
             
-            // 로그 메시지
             LogMessage($"🚀 화면 검열 시작! 대상: {string.Join(", ", selectedTargets)}");
             LogMessage($"⚙️ 설정: 강도={strengthSlider.Value}, 신뢰도={confidenceSlider.Value / 10.0:F2}, FPS={fpsSlider.Value}");
             
-            // Windows 기능 테스트
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 Thread.Sleep(3000);
@@ -693,16 +647,13 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             isRunning = false;
             
-            // 오버레이 숨기기
             overlay.Hide();
             
-            // 스레드 종료 대기
             if (processThread != null && processThread.IsAlive)
             {
                 processThread.Join(1000);
             }
             
-            // GUI 업데이트
             if (Root.InvokeRequired)
             {
                 Root.Invoke(new Action(() =>
@@ -733,7 +684,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             {
                 while (isRunning)
                 {
-                    // 원본 화면 캡처
                     var originalFrame = capturer.GetFrame();
                     if (originalFrame == null || originalFrame.Empty())
                     {
@@ -744,13 +694,10 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                     frameCount++;
                     stats["frames_processed"] = frameCount;
                     
-                    // 전체 화면 복사
                     var processedFrame = originalFrame.Clone();
                     
-                    // 객체 감지는 원본 프레임에서 수행
                     var detections = processor.DetectObjects(originalFrame);
                     
-                    // 모자이크 적용
                     if (detections != null && detections.Count > 0)
                     {
                         foreach (var detection in detections)
@@ -762,12 +709,10 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                             
                             stats["objects_detected"] = (int)stats["objects_detected"] + 1;
                             
-                            // 타겟인지 확인
                             if (processor.Targets.Contains(className))
                             {
                                 stats["mosaic_applied"] = (int)stats["mosaic_applied"] + 1;
                                 
-                                // 전체 화면에서 해당 영역에 모자이크 적용
                                 using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
                                 {
                                     if (!region.Empty())
@@ -776,7 +721,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                                         mosaicRegion.CopyTo(region);
                                         mosaicRegion.Dispose();
                                         
-                                        // 너무 많은 로그 출력 방지
                                         if (frameCount % 30 == 0)
                                         {
                                             LogMessage($"🎯 모자이크 적용: {className}");
@@ -787,10 +731,8 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         }
                     }
                     
-                    // 풀스크린에 전체 처리된 화면 표시
                     overlay.UpdateFrame(processedFrame);
                     
-                    // 디버그 이미지 저장
                     if (debugMode && (int)stats["mosaic_applied"] > 0)
                     {
                         var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
@@ -802,24 +744,20 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         Cv2.ImWrite(processedPath, processedFrame);
                     }
                     
-                    // 통계 업데이트 (매 30프레임마다)
                     if (frameCount % 30 == 0)
                     {
                         UpdateStats();
                     }
                     
-                    // 오버레이가 종료되었는지 확인 (ESC 키 등으로)
                     if (!overlay.IsWindowVisible())
                     {
                         isRunning = false;
                         break;
                     }
                     
-                    // 리소스 정리
                     originalFrame.Dispose();
                     processedFrame.Dispose();
                     
-                    // FPS 제한
                     Thread.Sleep(1000 / fpsSlider.Value);
                 }
             }
@@ -829,7 +767,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             }
             finally
             {
-                // 메인 스레드에서 정리 작업 수행
                 if (Root.InvokeRequired)
                 {
                     Root.Invoke(new Action(() => StopCensoring(null, null)));
