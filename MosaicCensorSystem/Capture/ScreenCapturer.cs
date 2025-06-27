@@ -12,8 +12,45 @@ using OpenCvSharp.Extensions;
 
 namespace MosaicCensorSystem.Capture
 {
+    /// <summary>
+    /// 화면 캡처 인터페이스
+    /// </summary>
+    public interface ICapturer
+    {
+        /// <summary>
+        /// 프레임 가져오기
+        /// </summary>
+        Mat? GetFrame();
+
+        /// <summary>
+        /// 캡처 스레드 시작
+        /// </summary>
+        void StartCaptureThread();
+
+        /// <summary>
+        /// 캡처 스레드 중지
+        /// </summary>
+        void StopCaptureThread();
+
+        /// <summary>
+        /// 캡처에서 제외할 윈도우 핸들 설정
+        /// </summary>
+        void SetExcludeHwnd(IntPtr hwnd);
+
+        /// <summary>
+        /// 캡처에서 제외할 영역 추가
+        /// </summary>
+        void AddExcludeRegion(int x, int y, int width, int height);
+
+        /// <summary>
+        /// 제외 영역 모두 제거
+        /// </summary>
+        void ClearExcludeRegions();
+    }
+
     public class ScreenCapturer : ICapturer, IDisposable
     {
+        #region Windows API
         [DllImport("user32.dll")]
         private static extern IntPtr GetDesktopWindow();
         
@@ -40,6 +77,7 @@ namespace MosaicCensorSystem.Capture
         private static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
 
         private const int SRCCOPY = 0x00CC0020;
+        #endregion
 
         private readonly Dictionary<string, object> config;
         private readonly double captureDownscale;
@@ -54,29 +92,30 @@ namespace MosaicCensorSystem.Capture
         private readonly int captureHeight;
 
         private readonly Rectangle monitor;
-        private Mat prevFrame;
+        private Mat? prevFrame;
         private int frameCount = 0;
 
         private readonly BlockingCollection<Mat> frameQueue;
         private readonly CancellationTokenSource cancellationTokenSource;
-        private Thread captureThread;
+        private Thread? captureThread;
 
         private IntPtr excludeHwnd = IntPtr.Zero;
         private readonly List<Rectangle> excludeRegions = new List<Rectangle>();
         private readonly string debugDir = "debug_captures";
 
-        public ScreenCapturer(Dictionary<string, object> config = null)
+        public ScreenCapturer(Dictionary<string, object>? config = null)
         {
-            this.config = config ?? Config.GetSection("capture");
+            this.config = config ?? new Dictionary<string, object>();
             
-            captureDownscale = Convert.ToDouble(this.config.GetValueOrDefault("downscale", 1.0));
-            debugMode = Convert.ToBoolean(this.config.GetValueOrDefault("debug_mode", false));
-            debugSaveInterval = Convert.ToInt32(this.config.GetValueOrDefault("debug_save_interval", 300));
+            captureDownscale = this.config.GetValueOrDefault("downscale", 1.0);
+            debugMode = this.config.GetValueOrDefault("debug_mode", false);
+            debugSaveInterval = this.config.GetValueOrDefault("debug_save_interval", 300);
 
-            screenWidth = Screen.PrimaryScreen.Bounds.Width;
-            screenHeight = Screen.PrimaryScreen.Bounds.Height;
-            screenLeft = Screen.PrimaryScreen.Bounds.Left;
-            screenTop = Screen.PrimaryScreen.Bounds.Top;
+            // 전체 화면 크기 가져오기 (멀티 모니터 지원)
+            screenLeft = SystemInformation.VirtualScreen.Left;
+            screenTop = SystemInformation.VirtualScreen.Top;
+            screenWidth = SystemInformation.VirtualScreen.Width;
+            screenHeight = SystemInformation.VirtualScreen.Height;
 
             captureWidth = (int)(screenWidth * captureDownscale);
             captureHeight = (int)(screenHeight * captureDownscale);
@@ -85,7 +124,7 @@ namespace MosaicCensorSystem.Capture
 
             monitor = new Rectangle(screenLeft, screenTop, screenWidth, screenHeight);
 
-            int queueSize = Convert.ToInt32(this.config.GetValueOrDefault("queue_size", 2));
+            int queueSize = this.config.GetValueOrDefault("queue_size", 2);
             frameQueue = new BlockingCollection<Mat>(queueSize);
             cancellationTokenSource = new CancellationTokenSource();
 
@@ -153,7 +192,7 @@ namespace MosaicCensorSystem.Capture
                 try
                 {
                     var elapsed = (DateTime.Now - lastFrameTime).TotalSeconds;
-                    if (elapsed < 0.01)
+                    if (elapsed < 0.01) // 최대 100 FPS
                     {
                         Thread.Sleep(1);
                         continue;
@@ -166,6 +205,7 @@ namespace MosaicCensorSystem.Capture
                     {
                         frameCount++;
                         
+                        // 큐가 가득 차면 이전 프레임 제거
                         if (frameQueue.Count >= frameQueue.BoundedCapacity)
                         {
                             if (frameQueue.TryTake(out var oldFrame))
@@ -204,12 +244,13 @@ namespace MosaicCensorSystem.Capture
             Console.WriteLine("🛑 캡처 스레드 종료");
         }
 
-        private Mat CaptureScreen()
+        private Mat? CaptureScreen()
         {
             IntPtr desktopDC = IntPtr.Zero;
             IntPtr memoryDC = IntPtr.Zero;
             IntPtr bitmap = IntPtr.Zero;
             IntPtr oldBitmap = IntPtr.Zero;
+            Bitmap? screenBitmap = null;
 
             try
             {
@@ -221,54 +262,62 @@ namespace MosaicCensorSystem.Capture
 
                 BitBlt(memoryDC, 0, 0, screenWidth, screenHeight, desktopDC, screenLeft, screenTop, SRCCOPY);
 
-                using (var screenBitmap = Image.FromHbitmap(bitmap))
+                screenBitmap = Image.FromHbitmap(bitmap);
+                Mat img = BitmapConverter.ToMat(screenBitmap);
+
+                // BGRA -> BGR 변환 (필요한 경우)
+                if (img.Channels() == 4)
                 {
-                    Bitmap bmp = (Bitmap)screenBitmap;
-                    Mat img = BitmapConverter.ToMat(bmp);
-
-                    if (img.Channels() == 4)
-                    {
-                        Cv2.CvtColor(img, img, ColorConversionCodes.BGRA2BGR);
-                    }
-
-                    if (Math.Abs(captureDownscale - 1.0) > 0.001)
-                    {
-                        Mat resized = new Mat();
-                        Cv2.Resize(img, resized, new OpenCvSharp.Size(captureWidth, captureHeight), 
-                            interpolation: InterpolationFlags.Nearest);
-                        img.Dispose();
-                        img = resized;
-                    }
-
-                    foreach (var region in excludeRegions)
-                    {
-                        if (region.X >= 0 && region.Y >= 0 && 
-                            region.X < img.Width && region.Y < img.Height)
-                        {
-                            int endX = Math.Min(region.X + region.Width, img.Width);
-                            int endY = Math.Min(region.Y + region.Height, img.Height);
-
-                            img[new Rect(region.X, region.Y, endX - region.X, endY - region.Y)] = new Scalar(0, 0, 0);
-                        }
-                    }
-
-                    if (debugMode && frameCount % debugSaveInterval == 0)
-                    {
-                        try
-                        {
-                            string debugPath = Path.Combine(debugDir, 
-                                $"screen_{DateTime.Now:yyyyMMdd_HHmmss}.jpg");
-                            Cv2.ImWrite(debugPath, img, new ImageEncodingParam(ImwriteFlags.JpegQuality, 80));
-                            Console.WriteLine($"📸 디버깅용 화면 캡처 저장: {debugPath} (크기: {img.Size()})");
-                        }
-                        catch (Exception e)
-                        {
-                            Console.WriteLine($"⚠️ 디버깅 캡처 저장 실패: {e.Message}");
-                        }
-                    }
-
-                    return img;
+                    Mat bgr = new Mat();
+                    Cv2.CvtColor(img, bgr, ColorConversionCodes.BGRA2BGR);
+                    img.Dispose();
+                    img = bgr;
                 }
+
+                // 다운스케일 (필요한 경우)
+                if (Math.Abs(captureDownscale - 1.0) > 0.001)
+                {
+                    Mat resized = new Mat();
+                    Cv2.Resize(img, resized, new OpenCvSharp.Size(captureWidth, captureHeight), 
+                        interpolation: InterpolationFlags.Nearest);
+                    img.Dispose();
+                    img = resized;
+                }
+
+                // 제외 영역 마스킹
+                foreach (var region in excludeRegions)
+                {
+                    if (region.X >= 0 && region.Y >= 0 && 
+                        region.X < img.Width && region.Y < img.Height)
+                    {
+                        int endX = Math.Min(region.X + region.Width, img.Width);
+                        int endY = Math.Min(region.Y + region.Height, img.Height);
+
+                        if (endX > region.X && endY > region.Y)
+                        {
+                            var rect = new Rect(region.X, region.Y, endX - region.X, endY - region.Y);
+                            img[rect].SetTo(new Scalar(0, 0, 0));
+                        }
+                    }
+                }
+
+                // 디버깅 모드: 주기적으로 화면 캡처 저장
+                if (debugMode && frameCount % debugSaveInterval == 0)
+                {
+                    try
+                    {
+                        string debugPath = Path.Combine(debugDir, 
+                            $"screen_{DateTime.Now:yyyyMMdd_HHmmss}.jpg");
+                        Cv2.ImWrite(debugPath, img, new ImageEncodingParam(ImwriteFlags.JpegQuality, 80));
+                        Console.WriteLine($"📸 디버깅용 화면 캡처 저장: {debugPath} (크기: {img.Size()})");
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine($"⚠️ 디버깅 캡처 저장 실패: {e.Message}");
+                    }
+                }
+
+                return img;
             }
             catch (Exception e)
             {
@@ -277,6 +326,9 @@ namespace MosaicCensorSystem.Capture
             }
             finally
             {
+                // 리소스 정리
+                screenBitmap?.Dispose();
+                
                 if (oldBitmap != IntPtr.Zero && memoryDC != IntPtr.Zero)
                     SelectObject(memoryDC, oldBitmap);
                 if (bitmap != IntPtr.Zero)
@@ -288,7 +340,7 @@ namespace MosaicCensorSystem.Capture
             }
         }
 
-        public Mat GetFrame()
+        public Mat? GetFrame()
         {
             try
             {
@@ -297,7 +349,7 @@ namespace MosaicCensorSystem.Capture
                     prevFrame?.Dispose();
                     prevFrame = frame.Clone();
 
-                    int logInterval = Convert.ToInt32(config.GetValueOrDefault("log_interval", 100));
+                    int logInterval = config.GetValueOrDefault("log_interval", 100);
                     if (frameCount % logInterval == 0)
                     {
                         Console.WriteLine($"📸 화면 캡처: 프레임 #{frameCount}, 크기: {frame.Size()}");
@@ -306,11 +358,13 @@ namespace MosaicCensorSystem.Capture
                     return frame;
                 }
 
+                // 큐가 비었으면 이전 프레임 반환
                 if (prevFrame != null && !prevFrame.Empty())
                 {
                     return prevFrame.Clone();
                 }
 
+                // 이전 프레임도 없으면 직접 캡처 시도
                 return CaptureScreen();
             }
             catch (Exception e)
@@ -324,6 +378,7 @@ namespace MosaicCensorSystem.Capture
         {
             StopCaptureThread();
             
+            // 큐에 남은 프레임들 정리
             while (frameQueue.TryTake(out var frame))
             {
                 frame?.Dispose();

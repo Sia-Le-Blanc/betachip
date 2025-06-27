@@ -9,27 +9,21 @@ namespace MosaicCensorSystem.UI
     /// </summary>
     public class ScrollablePanel : UserControl
     {
-        private Panel canvasPanel;
-        private VScrollBar scrollBar;
-        private Panel scrollableFrame;
+        private readonly Panel canvasPanel;
+        private readonly VScrollBar scrollBar;
+        private readonly Panel scrollableFrame;
 
         public Panel ScrollableFrame => scrollableFrame;
 
         public ScrollablePanel()
         {
-            InitializeComponents();
-        }
-
-        private void InitializeComponents()
-        {
-            // Canvas 패널
+            // 필드 먼저 초기화
             canvasPanel = new Panel
             {
                 Dock = DockStyle.Fill,
                 AutoScroll = false
             };
 
-            // 스크롤바
             scrollBar = new VScrollBar
             {
                 Dock = DockStyle.Right,
@@ -39,7 +33,6 @@ namespace MosaicCensorSystem.UI
                 SmallChange = 1
             };
 
-            // 스크롤 가능한 프레임
             scrollableFrame = new Panel
             {
                 Location = new Point(0, 0),
@@ -47,6 +40,12 @@ namespace MosaicCensorSystem.UI
                 AutoSizeMode = AutoSizeMode.GrowAndShrink
             };
 
+            // 초기화 완료 후 설정
+            InitializeComponents();
+        }
+
+        private void InitializeComponents()
+        {
             // 이벤트 연결
             scrollBar.Scroll += OnScrollBarScroll;
             scrollableFrame.SizeChanged += OnScrollableFrameSizeChanged;
@@ -61,17 +60,17 @@ namespace MosaicCensorSystem.UI
             BindMouseWheelRecursive(this);
         }
 
-        private void OnScrollBarScroll(object sender, ScrollEventArgs e)
+        private void OnScrollBarScroll(object? sender, ScrollEventArgs e)
         {
             UpdateScrollPosition();
         }
 
-        private void OnScrollableFrameSizeChanged(object sender, EventArgs e)
+        private void OnScrollableFrameSizeChanged(object? sender, EventArgs e)
         {
             UpdateScrollBarRange();
         }
 
-        private void OnCanvasPanelMouseWheel(object sender, MouseEventArgs e)
+        private void OnCanvasPanelMouseWheel(object? sender, MouseEventArgs e)
         {
             HandleMouseWheel(e.Delta);
         }
@@ -119,7 +118,10 @@ namespace MosaicCensorSystem.UI
             control.MouseWheel += (sender, e) =>
             {
                 HandleMouseWheel(e.Delta);
-                ((HandledMouseEventArgs)e).Handled = true;
+                if (e is HandledMouseEventArgs handledArgs)
+                {
+                    handledArgs.Handled = true;
+                }
             };
 
             foreach (Control child in control.Controls)
@@ -138,6 +140,17 @@ namespace MosaicCensorSystem.UI
         {
             scrollableFrame.Controls.Add(control);
             BindMouseWheelRecursive(control);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                canvasPanel?.Dispose();
+                scrollBar?.Dispose();
+                scrollableFrame?.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 }

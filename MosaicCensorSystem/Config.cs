@@ -1,370 +1,144 @@
-using System.Threading;
-using OpenCvSharp;
-using OpenCvSharp.Extensions;
+using System;
+using System.Collections.Generic;
 
-namespace MosaicCensorSystem.Capture
+namespace MosaicCensorSystem
 {
     /// <summary>
-    /// MSS 라이브러리를 사용한 고성능 화면 캡처 모듈
+    /// 애플리케이션 설정 관리 클래스
     /// </summary>
-    public class ScreenCapturer : ICapturer, IDisposable
+    public static class Config
     {
-        // Windows API
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetDesktopWindow();
-        
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetWindowDC(IntPtr hWnd);
-        
-        [DllImport("user32.dll")]
-        private static extern IntPtr ReleaseDC(IntPtr hWnd, IntPtr hDC);
-        
-        [DllImport("gdi32.dll")]
-        private static extern bool BitBlt(IntPtr hObject, int nXDest, int nYDest, int nWidth, int nHeight, 
-            IntPtr hObjectSource, int nXSrc, int nYSrc, int dwRop);
-        
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr CreateCompatibleBitmap(IntPtr hDC, int nWidth, int nHeight);
-        
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr CreateCompatibleDC(IntPtr hDC);
-        
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteObject(IntPtr hObject);
-        
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
-
-        private const int SRCCOPY = 0x00CC0020;
-
-        // 설정
-        private readonly Dictionary<string, object> config;
-        private readonly double captureDownscale;
-        private readonly bool debugMode;
-        private readonly int debugSaveInterval;
-
-        // 화면 정보
-        private readonly int screenWidth;
-        private readonly int screenHeight;
-        private readonly int screenLeft;
-        private readonly int screenTop;
-        private readonly int captureWidth;
-        private readonly int captureHeight;
-
-        // 캡처 영역
-        private readonly Rectangle monitor;
-
-        // 이전 프레임
-        private Mat prevFrame;
-
-        // 프레임 카운터
-        private int frameCount = 0;
-
-        // 프레임 큐 및 스레드
-        private readonly BlockingCollection<Mat> frameQueue;
-        private readonly CancellationTokenSource cancellationTokenSource;
-        private Thread captureThread;
-
-        // 제외 영역
-        private IntPtr excludeHwnd = IntPtr.Zero;
-        private readonly List<Rectangle> excludeRegions = new List<Rectangle>();
-
-        // 디버깅
-        private readonly string debugDir = "debug_captures";
-
-        public ScreenCapturer(Dictionary<string, object> config = null)
-        {
-            // 설정 가져오기
-            this.config = config ?? Config.GetSection("capture");
-            
-            captureDownscale = Convert.ToDouble(this.config.GetValueOrDefault("downscale", 1.0));
-            debugMode = Convert.ToBoolean(this.config.GetValueOrDefault("debug_mode", false));
-            debugSaveInterval = Convert.ToInt32(this.config.GetValueOrDefault("debug_save_interval", 300));
-
-            // 화면 정보 초기화
-            screenWidth = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width;
-            screenHeight = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height;
-            screenLeft = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Left;
-            screenTop = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Top;
-
-            // 캡처 크기 계산
-            captureWidth = (int)(screenWidth * captureDownscale);
-            captureHeight = (int)(screenHeight * captureDownscale);
-
-            Console.WriteLine($"✅ 화면 해상도: {screenWidth}x{screenHeight}, 캡처 크기: {captureWidth}x{captureHeight}");
-
-            // 캡처 영역 설정
-            monitor = new Rectangle(screenLeft, screenTop, screenWidth, screenHeight);
-
-            // 프레임 큐 및 스레드 설정
-            int queueSize = Convert.ToInt32(this.config.GetValueOrDefault("queue_size", 2));
-            frameQueue = new BlockingCollection<Mat>(queueSize);
-            cancellationTokenSource = new CancellationTokenSource();
-
-            // 디버깅 디렉토리 생성
-            if (debugMode)
+        private static readonly Dictionary<string, Dictionary<string, object>> configData = 
+            new Dictionary<string, Dictionary<string, object>>
             {
-                Directory.CreateDirectory(debugDir);
-            }
-
-            // 캡처 스레드 시작
-            StartCaptureThread();
-        }
-
-        public void SetExcludeHwnd(IntPtr hwnd)
-        {
-            excludeHwnd = hwnd;
-            Console.WriteLine($"✅ 제외 윈도우 핸들 설정: {hwnd}");
-        }
-
-        public void AddExcludeRegion(int x, int y, int width, int height)
-        {
-            excludeRegions.Add(new Rectangle(x, y, width, height));
-            Console.WriteLine($"✅ 제외 영역 추가: ({x}, {y}, {width}, {height})");
-        }
-
-        public void ClearExcludeRegions()
-        {
-            excludeRegions.Clear();
-        }
-
-        public void StartCaptureThread()
-        {
-            if (captureThread != null && captureThread.IsAlive)
-            {
-                Console.WriteLine("⚠️ 캡처 스레드가 이미 실행 중입니다.");
-                return;
-            }
-
-            captureThread = new Thread(CaptureThreadFunc)
-            {
-                Name = "ScreenCaptureThread",
-                Priority = ThreadPriority.Highest,
-                IsBackground = true
+                ["capture"] = new Dictionary<string, object>
+                {
+                    ["downscale"] = 1.0,
+                    ["debug_mode"] = false,
+                    ["debug_save_interval"] = 300,
+                    ["queue_size"] = 2,
+                    ["log_interval"] = 100
+                },
+                ["mosaic"] = new Dictionary<string, object>
+                {
+                    ["model_path"] = "Resources/best.onnx",
+                    ["conf_threshold"] = 0.1,
+                    ["default_targets"] = new List<string> { "얼굴", "가슴", "보지", "팬티" },
+                    ["default_strength"] = 15
+                },
+                ["overlay"] = new Dictionary<string, object>
+                {
+                    ["show_debug_info"] = false,
+                    ["fps_limit"] = 30
+                },
+                ["models"] = new Dictionary<string, object>
+                {
+                    ["class_names"] = new List<string>
+                    {
+                        "얼굴", "가슴", "겨드랑이", "보지", "발", "몸 전체",
+                        "자지", "팬티", "눈", "손", "교미", "신발",
+                        "가슴_옷", "보지_옷", "여성"
+                    }
+                }
             };
-            captureThread.Start();
-            Console.WriteLine("✅ 캡처 스레드 시작됨");
-        }
 
-        public void StopCaptureThread()
+        public static Dictionary<string, object> GetSection(string section)
         {
-            if (captureThread != null && captureThread.IsAlive)
-            {
-                cancellationTokenSource.Cancel();
-                captureThread.Join(1000);
-                Console.WriteLine("✅ 캡처 스레드 중지됨");
-            }
+            return configData.ContainsKey(section) ? configData[section] : new Dictionary<string, object>();
         }
 
-        private void CaptureThreadFunc()
-        {
-            Console.WriteLine("🔄 캡처 스레드 시작");
-            var lastFrameTime = DateTime.Now;
-            int retryCount = 0;
-
-            while (!cancellationTokenSource.Token.IsCancellationRequested)
-            {
-                try
-                {
-                    // 캡처 간격 제어 (최대 FPS 제한)
-                    var elapsed = (DateTime.Now - lastFrameTime).TotalSeconds;
-                    if (elapsed < 0.01) // 최대 약 100 FPS
-                    {
-                        Thread.Sleep(1);
-                        continue;
-                    }
-
-                    // 화면 캡처 시도
-                    var frame = CaptureScreen();
-                    lastFrameTime = DateTime.Now;
-
-                    if (frame != null && !frame.Empty())
-                    {
-                        frameCount++;
-                        
-                        // 프레임 큐가 가득 차면 이전 프레임 제거
-                        if (frameQueue.Count >= frameQueue.BoundedCapacity)
-                        {
-                            if (frameQueue.TryTake(out var oldFrame))
-                            {
-                                oldFrame?.Dispose();
-                            }
-                        }
-
-                        frameQueue.TryAdd(frame.Clone());
-                        frame.Dispose();
-                        retryCount = 0;
-                    }
-                    else
-                    {
-                        retryCount++;
-                        if (retryCount > 5)
-                        {
-                            Console.WriteLine($"⚠️ 연속 {retryCount}회 캡처 실패");
-                            retryCount = 0;
-                            Thread.Sleep(100);
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    Console.WriteLine($"❌ 캡처 스레드 오류: {e.Message}");
-                    retryCount++;
-                    if (retryCount > 5)
-                    {
-                        retryCount = 0;
-                    }
-                    Thread.Sleep(100);
-                }
-            }
-
-            Console.WriteLine("🛑 캡처 스레드 종료");
-        }
-
-        private Mat CaptureScreen()
-        {
-            IntPtr desktopDC = IntPtr.Zero;
-            IntPtr memoryDC = IntPtr.Zero;
-            IntPtr bitmap = IntPtr.Zero;
-            IntPtr oldBitmap = IntPtr.Zero;
-
-            try
-            {
-                // 데스크톱 DC 가져오기
-                desktopDC = GetWindowDC(GetDesktopWindow());
-                memoryDC = CreateCompatibleDC(desktopDC);
-
-                // 비트맵 생성
-                bitmap = CreateCompatibleBitmap(desktopDC, screenWidth, screenHeight);
-                oldBitmap = SelectObject(memoryDC, bitmap);
-
-                // 화면 캡처
-                BitBlt(memoryDC, 0, 0, screenWidth, screenHeight, desktopDC, screenLeft, screenTop, SRCCOPY);
-
-                // Bitmap으로 변환
-                using (var screenBitmap = Image.FromHbitmap(bitmap))
-                {
-                    // OpenCV Mat으로 변환
-                    Mat img = BitmapConverter.ToMat((Bitmap)screenBitmap);
-
-                    // BGR 형식으로 변환 (필요한 경우)
-                    if (img.Channels() == 4)
-                    {
-                        Cv2.CvtColor(img, img, ColorConversionCodes.BGRA2BGR);
-                    }
-
-                    // 성능 최적화: 필요한 경우만 다운스케일
-                    if (Math.Abs(captureDownscale - 1.0) > 0.001)
-                    {
-                        Mat resized = new Mat();
-                        Cv2.Resize(img, resized, new OpenCvSharp.Size(captureWidth, captureHeight), 
-                            interpolation: InterpolationFlags.Nearest);
-                        img.Dispose();
-                        img = resized;
-                    }
-
-                    // 제외 영역 마스킹
-                    foreach (var region in excludeRegions)
-                    {
-                        if (region.X >= 0 && region.Y >= 0 && 
-                            region.X < img.Width && region.Y < img.Height)
-                        {
-                            int endX = Math.Min(region.X + region.Width, img.Width);
-                            int endY = Math.Min(region.Y + region.Height, img.Height);
-
-                            // 검은색으로 채우기
-                            img[new Rect(region.X, region.Y, endX - region.X, endY - region.Y)] = new Scalar(0, 0, 0);
-                        }
-                    }
-
-                    // 디버깅 모드: 주기적으로 화면 캡처 저장
-                    if (debugMode && frameCount % debugSaveInterval == 0)
-                    {
-                        try
-                        {
-                            string debugPath = Path.Combine(debugDir, 
-                                $"screen_{DateTime.Now:yyyyMMdd_HHmmss}.jpg");
-                            Cv2.ImWrite(debugPath, img, new ImageEncodingParam(ImwriteFlags.JpegQuality, 80));
-                            Console.WriteLine($"📸 디버깅용 화면 캡처 저장: {debugPath} (크기: {img.Size()})");
-                        }
-                        catch (Exception e)
-                        {
-                            Console.WriteLine($"⚠️ 디버깅 캡처 저장 실패: {e.Message}");
-                        }
-                    }
-
-                    return img;
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"❌ 화면 캡처 오류: {e.Message}");
-                return null;
-            }
-            finally
-            {
-                // 리소스 정리
-                if (oldBitmap != IntPtr.Zero && memoryDC != IntPtr.Zero)
-                    SelectObject(memoryDC, oldBitmap);
-                if (bitmap != IntPtr.Zero)
-                    DeleteObject(bitmap);
-                if (memoryDC != IntPtr.Zero)
-                    DeleteObject(memoryDC);
-                if (desktopDC != IntPtr.Zero)
-                    ReleaseDC(GetDesktopWindow(), desktopDC);
-            }
-        }
-
-        public Mat GetFrame()
+        public static T Get<T>(string section, string key, T defaultValue = default!)
         {
             try
             {
-                // 큐에서 프레임 가져오기
-                if (frameQueue.TryTake(out var frame, 100))
+                if (configData.ContainsKey(section) && configData[section].ContainsKey(key))
                 {
-                    // 프레임 저장
-                    prevFrame?.Dispose();
-                    prevFrame = frame.Clone();
-
-                    // 주기적인 로그 출력
-                    int logInterval = Convert.ToInt32(config.GetValueOrDefault("log_interval", 100));
-                    if (frameCount % logInterval == 0)
+                    var value = configData[section][key];
+                    if (value is T directValue)
+                        return directValue;
+                    
+                    // 타입 변환 시도
+                    if (typeof(T) == typeof(bool) && value is bool boolValue)
+                        return (T)(object)boolValue;
+                    if (typeof(T) == typeof(int) && value is int intValue)
+                        return (T)(object)intValue;
+                    if (typeof(T) == typeof(double) && value is double doubleValue)
+                        return (T)(object)doubleValue;
+                    if (typeof(T) == typeof(float))
                     {
-                        Console.WriteLine($"📸 화면 캡처: 프레임 #{frameCount}, 크기: {frame.Size()}");
+                        if (value is double d)
+                            return (T)(object)(float)d;
+                        if (value is float f)
+                            return (T)(object)f;
                     }
-
-                    return frame;
+                    if (typeof(T) == typeof(string) && value is string stringValue)
+                        return (T)(object)stringValue;
+                    if (typeof(T) == typeof(List<string>) && value is List<string> listValue)
+                        return (T)(object)listValue;
+                    
+                    // 일반적인 타입 변환
+                    return (T)Convert.ChangeType(value, typeof(T));
                 }
-
-                // 큐가 비었으면 이전 프레임 반환
-                if (prevFrame != null && !prevFrame.Empty())
-                {
-                    return prevFrame.Clone();
-                }
-
-                // 이전 프레임도 없으면 직접 캡처 시도
-                return CaptureScreen();
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Console.WriteLine($"❌ 프레임 가져오기 오류: {e.Message}");
-                return prevFrame?.Clone();
+                Console.WriteLine($"⚠️ 설정 읽기 오류 [{section}.{key}]: {ex.Message}");
             }
+            
+            return defaultValue;
         }
 
-        public void Dispose()
+        public static void Set(string section, string key, object value)
         {
-            StopCaptureThread();
+            if (!configData.ContainsKey(section))
+                configData[section] = new Dictionary<string, object>();
             
-            // 큐에 남은 프레임 정리
-            while (frameQueue.TryTake(out var frame))
+            configData[section][key] = value;
+        }
+    }
+
+    /// <summary>
+    /// Dictionary 확장 메서드
+    /// </summary>
+    public static class DictionaryExtensions
+    {
+        public static T GetValueOrDefault<T>(this Dictionary<string, object>? dict, string key, T defaultValue = default!)
+        {
+            if (dict == null || !dict.ContainsKey(key))
+                return defaultValue;
+
+            try
             {
-                frame?.Dispose();
+                var value = dict[key];
+                if (value is T directValue)
+                    return directValue;
+
+                // 특별한 타입 변환들
+                if (typeof(T) == typeof(bool) && value is bool boolValue)
+                    return (T)(object)boolValue;
+                if (typeof(T) == typeof(int) && value is int intValue)
+                    return (T)(object)intValue;
+                if (typeof(T) == typeof(double) && value is double doubleValue)
+                    return (T)(object)doubleValue;
+                if (typeof(T) == typeof(float))
+                {
+                    if (value is double d)
+                        return (T)(object)(float)d;
+                    if (value is float f)
+                        return (T)(object)f;
+                }
+                if (typeof(T) == typeof(string) && value is string stringValue)
+                    return (T)(object)stringValue;
+                if (typeof(T) == typeof(List<string>) && value is List<string> listValue)
+                    return (T)(object)listValue;
+                
+                // 일반적인 타입 변환
+                return (T)Convert.ChangeType(value, typeof(T));
             }
-            
-            prevFrame?.Dispose();
-            frameQueue?.Dispose();
-            cancellationTokenSource?.Dispose();
+            catch
+            {
+                return defaultValue;
+            }
         }
     }
 }

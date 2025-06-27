@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -8,36 +7,99 @@ using OpenCvSharp;
 
 namespace MosaicCensorSystem.Detection
 {
+    /// <summary>
+    /// 객체 감지 결과를 나타내는 클래스
+    /// </summary>
+    public class Detection
+    {
+        public string ClassName { get; set; } = "";
+        public float Confidence { get; set; }
+        public int[] BBox { get; set; } = new int[4]; // [x1, y1, x2, y2]
+        public int ClassId { get; set; }
+    }
+
+    /// <summary>
+    /// 성능 통계를 나타내는 클래스
+    /// </summary>
+    public class PerformanceStats
+    {
+        public double AvgDetectionTime { get; set; }
+        public double Fps { get; set; }
+        public int LastDetectionsCount { get; set; }
+    }
+
+    /// <summary>
+    /// 모자이크 처리 인터페이스
+    /// </summary>
+    public interface IProcessor
+    {
+        void SetTargets(List<string> targets);
+        void SetStrength(int strength);
+        List<Detection> DetectObjects(Mat frame);
+        (Mat processedFrame, List<Detection> detections) DetectObjectsDetailed(Mat frame);
+        Mat ApplyMosaic(Mat image, int? strength = null);
+        Mat? CreateMosaicForRegion(Mat frame, int x1, int y1, int x2, int y2, int? strength = null);
+        PerformanceStats GetPerformanceStats();
+        void UpdateConfig(Dictionary<string, object> kwargs);
+        bool IsModelLoaded();
+        List<string> GetAvailableClasses();
+        void ResetStats();
+        float ConfThreshold { get; set; }
+        List<string> Targets { get; }
+        int Strength { get; }
+    }
+
+    /// <summary>
+    /// 최적화된 모자이크 프로세서 - 피드백 루프 해결 버전
+    /// 원본 프레임에서만 감지하고, 개별 영역 모자이크 정보 제공
+    /// </summary>
     public class MosaicProcessor : IProcessor, IDisposable
     {
         private readonly Dictionary<string, object> config;
-        private InferenceSession model;
-        private readonly List<string> classNames;
-        
+        private InferenceSession? model;
+        private readonly string modelPath;
+
+        // 설정값들
         public float ConfThreshold { get; set; }
         public List<string> Targets { get; private set; }
         public int Strength { get; private set; }
 
+        // 클래스 이름 매핑
+        private readonly List<string> classNames = new List<string>
+        {
+            "얼굴", "가슴", "겨드랑이", "보지", "발", "몸 전체",
+            "자지", "팬티", "눈", "손", "교미", "신발",
+            "가슴_옷", "보지_옷", "여성"
+        };
+
+        // 성능 통계
         private readonly List<double> detectionTimes = new List<double>();
         private List<Detection> lastDetections = new List<Detection>();
+        private readonly object statsLock = new object();
 
-        public MosaicProcessor(string modelPath = null, Dictionary<string, object> config = null)
+        public MosaicProcessor(string? modelPath = null, Dictionary<string, object>? config = null)
         {
-            this.config = config ?? Config.GetSection("mosaic");
-
-            if (string.IsNullOrEmpty(modelPath))
+            this.config = config ?? new Dictionary<string, object>();
+            
+            // 모델 경로 설정
+            this.modelPath = modelPath ?? "Resources/best.onnx";
+            if (!System.IO.File.Exists(this.modelPath))
             {
-                modelPath = this.config.GetValueOrDefault("model_path", "Resources/best.onnx") as string;
+                this.modelPath = Program.ONNX_MODEL_PATH;
             }
 
+            // YOLO 모델 로드
             try
             {
-                Console.WriteLine($"🤖 YOLO 모델 로딩 중: {modelPath}");
+                Console.WriteLine($"🤖 YOLO 모델 로딩 중: {this.modelPath}");
+                var sessionOptions = new SessionOptions
+                {
+                    EnableCpuMemArena = false,
+                    EnableMemoryPattern = false,
+                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+                };
                 
-                var options = new SessionOptions();
-                options.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-                
-                model = new InferenceSession(modelPath, options);
+                model = new InferenceSession(this.modelPath, sessionOptions);
                 Console.WriteLine("✅ YOLO 모델 로드 성공");
             }
             catch (Exception e)
@@ -46,14 +108,10 @@ namespace MosaicCensorSystem.Detection
                 model = null;
             }
 
-            var modelConfig = Config.GetSection("models");
-            classNames = (modelConfig.GetValueOrDefault("class_names", new List<string>()) as List<string>) 
-                ?? new List<string>();
-
-            ConfThreshold = Convert.ToSingle(this.config.GetValueOrDefault("conf_threshold", 0.1));
-            Targets = (this.config.GetValueOrDefault("default_targets", new List<string> { "여성" }) as List<string>)
-                ?? new List<string> { "여성" };
-            Strength = Convert.ToInt32(this.config.GetValueOrDefault("default_strength", 15));
+            // 설정값들 초기화
+            ConfThreshold = 0.1f;
+            Targets = new List<string> { "여성" };
+            Strength = 15;
 
             Console.WriteLine($"🎯 기본 타겟: {string.Join(", ", Targets)}");
             Console.WriteLine($"⚙️ 기본 설정: 강도={Strength}, 신뢰도={ConfThreshold}");
@@ -61,8 +119,8 @@ namespace MosaicCensorSystem.Detection
 
         public void SetTargets(List<string> targets)
         {
-            Targets = targets;
-            Console.WriteLine($"🎯 타겟 변경: {string.Join(", ", targets)}");
+            Targets = targets ?? new List<string>();
+            Console.WriteLine($"🎯 타겟 변경: {string.Join(", ", Targets)}");
         }
 
         public void SetStrength(int strength)
@@ -74,58 +132,45 @@ namespace MosaicCensorSystem.Detection
         public List<Detection> DetectObjects(Mat frame)
         {
             if (model == null || frame == null || frame.Empty())
-            {
                 return new List<Detection>();
-            }
 
             try
             {
-                var stopwatch = Stopwatch.StartNew();
+                var startTime = DateTime.Now;
 
-                const int inputSize = 640;
+                // 전처리
+                var inputTensor = PreprocessFrame(frame);
+                if (inputTensor == null)
+                    return new List<Detection>();
 
-                Mat resized = new Mat();
-                Cv2.Resize(frame, resized, new Size(inputSize, inputSize));
-
-                Mat rgb = new Mat();
-                Cv2.CvtColor(resized, rgb, ColorConversionCodes.BGR2RGB);
-
-                var inputTensor = new DenseTensor<float>(new[] { 1, 3, inputSize, inputSize });
-                for (int y = 0; y < inputSize; y++)
-                {
-                    for (int x = 0; x < inputSize; x++)
-                    {
-                        var pixel = rgb.At<Vec3b>(y, x);
-                        inputTensor[0, 0, y, x] = pixel[0] / 255.0f;
-                        inputTensor[0, 1, y, x] = pixel[1] / 255.0f;
-                        inputTensor[0, 2, y, x] = pixel[2] / 255.0f;
-                    }
-                }
-
+                // YOLO 추론
                 var inputs = new List<NamedOnnxValue>
                 {
                     NamedOnnxValue.CreateFromTensor("images", inputTensor)
                 };
 
-                using (var results = model.Run(inputs))
-                {
-                    var output = results.First().AsEnumerable<float>().ToArray();
-                    var detections = ParseYoloOutput(output, frame.Width, frame.Height);
+                using var results = model.Run(inputs);
+                var output = results.FirstOrDefault()?.AsEnumerable<float>().ToArray();
 
-                    stopwatch.Stop();
-                    detectionTimes.Add(stopwatch.Elapsed.TotalSeconds);
+                if (output == null)
+                    return new List<Detection>();
+
+                // 후처리
+                var detections = PostprocessOutput(output, frame.Width, frame.Height);
+
+                // 성능 통계 업데이트
+                var detectionTime = (DateTime.Now - startTime).TotalSeconds;
+                lock (statsLock)
+                {
+                    detectionTimes.Add(detectionTime);
                     if (detectionTimes.Count > 100)
                     {
-                        detectionTimes.RemoveRange(0, 50);
+                        detectionTimes.RemoveRange(0, detectionTimes.Count - 50);
                     }
-
                     lastDetections = detections;
-
-                    resized.Dispose();
-                    rgb.Dispose();
-
-                    return detections;
                 }
+
+                return detections;
             }
             catch (Exception e)
             {
@@ -134,93 +179,151 @@ namespace MosaicCensorSystem.Detection
             }
         }
 
-        private List<Detection> ParseYoloOutput(float[] output, int originalWidth, int originalHeight)
+        private DenseTensor<float>? PreprocessFrame(Mat frame)
         {
-            var detections = new List<Detection>();
-            
-            int numClasses = classNames.Count;
-            int stride = 5 + numClasses;
-            int numDetections = output.Length / stride;
-
-            for (int i = 0; i < numDetections; i++)
+            try
             {
-                int baseIdx = i * stride;
+                // 640x640으로 리사이즈
+                using var resized = new Mat();
+                Cv2.Resize(frame, resized, new OpenCvSharp.Size(640, 640));
+
+                // BGR to RGB 변환
+                using var rgb = new Mat();
+                Cv2.CvtColor(resized, rgb, ColorConversionCodes.BGR2RGB);
+
+                // 정규화 및 텐서 변환
+                var tensor = new DenseTensor<float>(new[] { 1, 3, 640, 640 });
+
+                // OpenCV Mat을 직접 사용한 안전한 픽셀 접근
+                var indexer = rgb.GetGenericIndexer<Vec3b>();
                 
-                float confidence = output[baseIdx + 4];
-                if (confidence < ConfThreshold)
-                    continue;
-
-                float cx = output[baseIdx + 0];
-                float cy = output[baseIdx + 1];
-                float w = output[baseIdx + 2];
-                float h = output[baseIdx + 3];
-
-                int bestClassIdx = -1;
-                float bestClassScore = 0;
-                for (int j = 0; j < numClasses; j++)
+                for (int h = 0; h < 640; h++)
                 {
-                    float classScore = output[baseIdx + 5 + j];
-                    if (classScore > bestClassScore)
+                    for (int w = 0; w < 640; w++)
                     {
-                        bestClassScore = classScore;
-                        bestClassIdx = j;
+                        var pixel = indexer[h, w];
+                        // RGB 순서로 저장 (OpenCV는 BGR)
+                        tensor[0, 0, h, w] = pixel.Item2 / 255.0f; // R
+                        tensor[0, 1, h, w] = pixel.Item1 / 255.0f; // G  
+                        tensor[0, 2, h, w] = pixel.Item0 / 255.0f; // B
                     }
                 }
 
-                if (bestClassIdx < 0 || bestClassScore * confidence < ConfThreshold)
-                    continue;
-
-                int x1 = (int)((cx - w / 2) * originalWidth / 640);
-                int y1 = (int)((cy - h / 2) * originalHeight / 640);
-                int x2 = (int)((cx + w / 2) * originalWidth / 640);
-                int y2 = (int)((cy + h / 2) * originalHeight / 640);
-
-                x1 = Math.Max(0, Math.Min(originalWidth - 1, x1));
-                y1 = Math.Max(0, Math.Min(originalHeight - 1, y1));
-                x2 = Math.Max(0, Math.Min(originalWidth - 1, x2));
-                y2 = Math.Max(0, Math.Min(originalHeight - 1, y2));
-
-                if (x2 > x1 && y2 > y1)
-                {
-                    detections.Add(new Detection
-                    {
-                        ClassName = bestClassIdx < classNames.Count ? classNames[bestClassIdx] : $"class_{bestClassIdx}",
-                        Confidence = confidence * bestClassScore,
-                        BBox = new[] { x1, y1, x2, y2 },
-                        ClassId = bestClassIdx
-                    });
-                }
+                return tensor;
             }
-
-            return ApplyNMS(detections, 0.5f);
+            catch (Exception e)
+            {
+                Console.WriteLine($"❌ 전처리 오류: {e.Message}");
+                return null;
+            }
         }
 
-        private List<Detection> ApplyNMS(List<Detection> detections, float iouThreshold)
+        private List<Detection> PostprocessOutput(float[] output, int originalWidth, int originalHeight)
         {
-            if (detections.Count == 0)
-                return detections;
+            var detections = new List<Detection>();
 
-            detections.Sort((a, b) => b.Confidence.CompareTo(a.Confidence));
-
-            var keep = new List<Detection>();
-            var suppress = new HashSet<int>();
-
-            for (int i = 0; i < detections.Count; i++)
+            try
             {
-                if (suppress.Contains(i))
-                    continue;
-
-                keep.Add(detections[i]);
-
-                for (int j = i + 1; j < detections.Count; j++)
+                // YOLO 출력 형태 추정: [1, 25200, 20] (20 = 4 bbox + 1 confidence + 15 classes)
+                int numDetections = output.Length / 20;
+                
+                for (int i = 0; i < numDetections; i++)
                 {
-                    if (suppress.Contains(j))
-                        continue;
+                    int baseIndex = i * 20;
+                    
+                    // 범위 확인
+                    if (baseIndex + 19 >= output.Length) break;
+                    
+                    // 바운딩 박스 (중심점 + 크기)
+                    float centerX = output[baseIndex + 0];
+                    float centerY = output[baseIndex + 1];
+                    float width = output[baseIndex + 2];
+                    float height = output[baseIndex + 3];
+                    float objectConfidence = output[baseIndex + 4];
 
-                    float iou = CalculateIoU(detections[i].BBox, detections[j].BBox);
-                    if (iou > iouThreshold)
+                    // 클래스별 확률
+                    float maxClassProb = 0;
+                    int maxClassIndex = 0;
+                    
+                    for (int j = 0; j < 15; j++)
                     {
-                        suppress.Add(j);
+                        if (baseIndex + 5 + j < output.Length)
+                        {
+                            float classProb = output[baseIndex + 5 + j];
+                            if (classProb > maxClassProb)
+                            {
+                                maxClassProb = classProb;
+                                maxClassIndex = j;
+                            }
+                        }
+                    }
+
+                    float confidence = objectConfidence * maxClassProb;
+
+                    if (confidence >= ConfThreshold)
+                    {
+                        // 좌표 변환 (640x640 -> 원본 크기)
+                        float scaleX = originalWidth / 640.0f;
+                        float scaleY = originalHeight / 640.0f;
+
+                        int x1 = (int)((centerX - width / 2) * scaleX);
+                        int y1 = (int)((centerY - height / 2) * scaleY);
+                        int x2 = (int)((centerX + width / 2) * scaleX);
+                        int y2 = (int)((centerY + height / 2) * scaleY);
+
+                        // 경계 확인
+                        x1 = Math.Max(0, Math.Min(x1, originalWidth - 1));
+                        y1 = Math.Max(0, Math.Min(y1, originalHeight - 1));
+                        x2 = Math.Max(0, Math.Min(x2, originalWidth - 1));
+                        y2 = Math.Max(0, Math.Min(y2, originalHeight - 1));
+
+                        if (x2 > x1 && y2 > y1 && maxClassIndex < classNames.Count)
+                        {
+                            var detection = new Detection
+                            {
+                                ClassName = classNames[maxClassIndex],
+                                Confidence = confidence,
+                                BBox = new int[] { x1, y1, x2, y2 },
+                                ClassId = maxClassIndex
+                            };
+                            detections.Add(detection);
+                        }
+                    }
+                }
+
+                // NMS (Non-Maximum Suppression) 적용
+                detections = ApplyNMS(detections, 0.4f);
+
+                return detections;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"❌ 후처리 오류: {e.Message}");
+                return new List<Detection>();
+            }
+        }
+
+        private List<Detection> ApplyNMS(List<Detection> detections, float nmsThreshold)
+        {
+            if (detections.Count == 0) return detections;
+
+            // 신뢰도 순으로 정렬
+            detections = detections.OrderByDescending(d => d.Confidence).ToList();
+            var keep = new List<Detection>();
+
+            while (detections.Count > 0)
+            {
+                var current = detections[0];
+                keep.Add(current);
+                detections.RemoveAt(0);
+
+                // IoU 계산하여 겹치는 박스 제거
+                for (int i = detections.Count - 1; i >= 0; i--)
+                {
+                    float iou = CalculateIoU(current.BBox, detections[i].BBox);
+                    if (iou > nmsThreshold)
+                    {
+                        detections.RemoveAt(i);
                     }
                 }
             }
@@ -235,38 +338,35 @@ namespace MosaicCensorSystem.Detection
             int x2 = Math.Min(box1[2], box2[2]);
             int y2 = Math.Min(box1[3], box2[3]);
 
-            if (x2 < x1 || y2 < y1)
-                return 0;
+            if (x2 <= x1 || y2 <= y1) return 0;
 
-            int intersection = (x2 - x1) * (y2 - y1);
-            int area1 = (box1[2] - box1[0]) * (box1[3] - box1[1]);
-            int area2 = (box2[2] - box2[0]) * (box2[3] - box2[1]);
-            int union = area1 + area2 - intersection;
+            float intersection = (x2 - x1) * (y2 - y1);
+            float area1 = (box1[2] - box1[0]) * (box1[3] - box1[1]);
+            float area2 = (box2[2] - box2[0]) * (box2[3] - box2[1]);
+            float union = area1 + area2 - intersection;
 
-            return (float)intersection / union;
+            return union > 0 ? intersection / union : 0;
         }
 
         public (Mat processedFrame, List<Detection> detections) DetectObjectsDetailed(Mat frame)
         {
             var detections = DetectObjects(frame);
-            Mat processedFrame = frame.Clone();
+            var processedFrame = frame.Clone();
 
             foreach (var detection in detections)
             {
                 if (Targets.Contains(detection.ClassName))
                 {
-                    int x1 = detection.BBox[0];
-                    int y1 = detection.BBox[1];
-                    int x2 = detection.BBox[2];
-                    int y2 = detection.BBox[3];
+                    int x1 = detection.BBox[0], y1 = detection.BBox[1];
+                    int x2 = detection.BBox[2], y2 = detection.BBox[3];
 
-                    using (Mat region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                    if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= frame.Width && y2 <= frame.Height)
                     {
+                        using var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1));
                         if (!region.Empty())
                         {
-                            Mat mosaicRegion = ApplyMosaic(region, Strength);
+                            using var mosaicRegion = ApplyMosaic(region, Strength);
                             mosaicRegion.CopyTo(region);
-                            mosaicRegion.Dispose();
                         }
                     }
                 }
@@ -277,27 +377,25 @@ namespace MosaicCensorSystem.Detection
 
         public Mat ApplyMosaic(Mat image, int? strength = null)
         {
-            if (strength == null)
-                strength = Strength;
-
-            if (image.Empty())
-                return image.Clone();
+            int mosaicStrength = strength ?? Strength;
+            
+            if (image == null || image.Empty())
+                return image?.Clone() ?? new Mat();
 
             try
             {
                 int h = image.Height;
                 int w = image.Width;
 
-                int smallH = Math.Max(1, h / strength.Value);
-                int smallW = Math.Max(1, w / strength.Value);
+                int smallH = Math.Max(1, h / mosaicStrength);
+                int smallW = Math.Max(1, w / mosaicStrength);
 
-                Mat small = new Mat();
-                Mat mosaic = new Mat();
+                using var small = new Mat();
+                Cv2.Resize(image, small, new OpenCvSharp.Size(smallW, smallH), interpolation: InterpolationFlags.Linear);
                 
-                Cv2.Resize(image, small, new Size(smallW, smallH), interpolation: InterpolationFlags.Linear);
-                Cv2.Resize(small, mosaic, new Size(w, h), interpolation: InterpolationFlags.Nearest);
+                var mosaic = new Mat();
+                Cv2.Resize(small, mosaic, new OpenCvSharp.Size(w, h), interpolation: InterpolationFlags.Nearest);
 
-                small.Dispose();
                 return mosaic;
             }
             catch (Exception e)
@@ -307,17 +405,18 @@ namespace MosaicCensorSystem.Detection
             }
         }
 
-        public Mat CreateMosaicForRegion(Mat frame, int x1, int y1, int x2, int y2, int? strength = null)
+        public Mat? CreateMosaicForRegion(Mat frame, int x1, int y1, int x2, int y2, int? strength = null)
         {
             try
             {
-                using (Mat region = new Mat(frame, new Rect(x1, y1, x2 - x1, y2 - y1)))
-                {
-                    if (region.Empty())
-                        return null;
+                if (x2 <= x1 || y2 <= y1 || x1 < 0 || y1 < 0 || x2 > frame.Width || y2 > frame.Height)
+                    return null;
 
-                    return ApplyMosaic(region, strength);
-                }
+                using var region = new Mat(frame, new Rect(x1, y1, x2 - x1, y2 - y1));
+                if (region.Empty())
+                    return null;
+
+                return ApplyMosaic(region, strength);
             }
             catch (Exception e)
             {
@@ -328,25 +427,28 @@ namespace MosaicCensorSystem.Detection
 
         public PerformanceStats GetPerformanceStats()
         {
-            if (detectionTimes.Count == 0)
+            lock (statsLock)
             {
+                if (detectionTimes.Count == 0)
+                {
+                    return new PerformanceStats
+                    {
+                        AvgDetectionTime = 0,
+                        Fps = 0,
+                        LastDetectionsCount = 0
+                    };
+                }
+
+                double avgTime = detectionTimes.Average();
+                double fps = avgTime > 0 ? 1.0 / avgTime : 0;
+
                 return new PerformanceStats
                 {
-                    AvgDetectionTime = 0,
-                    Fps = 0,
-                    LastDetectionsCount = 0
+                    AvgDetectionTime = avgTime,
+                    Fps = fps,
+                    LastDetectionsCount = lastDetections.Count
                 };
             }
-
-            double avgTime = detectionTimes.Average();
-            double fps = avgTime > 0 ? 1.0 / avgTime : 0;
-
-            return new PerformanceStats
-            {
-                AvgDetectionTime = avgTime,
-                Fps = fps,
-                LastDetectionsCount = lastDetections.Count
-            };
         }
 
         public void UpdateConfig(Dictionary<string, object> kwargs)
@@ -359,7 +461,8 @@ namespace MosaicCensorSystem.Detection
                         ConfThreshold = Math.Max(0.01f, Math.Min(0.99f, Convert.ToSingle(kvp.Value)));
                         break;
                     case "targets":
-                        Targets = kvp.Value as List<string> ?? new List<string>();
+                        if (kvp.Value is List<string> targets)
+                            Targets = targets;
                         break;
                     case "strength":
                         Strength = Math.Max(1, Math.Min(50, Convert.ToInt32(kvp.Value)));
@@ -367,7 +470,7 @@ namespace MosaicCensorSystem.Detection
                 }
             }
 
-            Console.WriteLine($"⚙️ 설정 업데이트: {string.Join(", ", kwargs.Select(kvp => $"{kvp.Key}={kvp.Value}"))}");
+            Console.WriteLine($"⚙️ 설정 업데이트: {string.Join(", ", kwargs.Keys)}");
         }
 
         public bool IsModelLoaded()
@@ -377,19 +480,23 @@ namespace MosaicCensorSystem.Detection
 
         public List<string> GetAvailableClasses()
         {
-            return model != null ? new List<string>(classNames) : new List<string>();
+            return new List<string>(classNames);
         }
 
         public void ResetStats()
         {
-            detectionTimes.Clear();
-            lastDetections.Clear();
+            lock (statsLock)
+            {
+                detectionTimes.Clear();
+                lastDetections.Clear();
+            }
             Console.WriteLine("📊 성능 통계 초기화됨");
         }
 
         public void Dispose()
         {
             model?.Dispose();
+            Console.WriteLine("🧹 MosaicProcessor 리소스 정리됨");
         }
     }
 }
