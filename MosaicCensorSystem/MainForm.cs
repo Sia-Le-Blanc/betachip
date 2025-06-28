@@ -1,3 +1,4 @@
+#nullable disable
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -588,6 +589,13 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             processor.SetTargets(selectedTargets);
             processor.SetStrength(strengthSlider.Value);
             processor.ConfThreshold = confidenceSlider.Value / 10.0f;
+            if (!processor.IsModelLoaded())
+            {
+                LogMessage(" ONNX 모델이 로드되지 않았습니다!");
+                MessageBox.Show("ONNX 모델 로딩 실패!");
+                return;
+            }
+            LogMessage("ONNX 모델 로드 확인됨!");
             debugMode = debugCheckBox.Checked;
             
             overlay.ShowDebugInfo = showDebugInfoCheckBox.Checked;
