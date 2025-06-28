@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Linq;
 using System.Windows.Forms;
 using OpenCvSharp;
 using MosaicCensorSystem.Capture;
@@ -514,44 +516,74 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
             var fullMessage = $"[{timestamp}] {message}";
             
-            if (Root.InvokeRequired)
-            {
-                Root.Invoke(new Action(() =>
-                {
-                    logTextBox.AppendText(fullMessage + Environment.NewLine);
-                    logTextBox.SelectionStart = logTextBox.Text.Length;
-                    logTextBox.ScrollToCaret();
-                }));
-            }
-            else
-            {
-                logTextBox.AppendText(fullMessage + Environment.NewLine);
-                logTextBox.SelectionStart = logTextBox.Text.Length;
-                logTextBox.ScrollToCaret();
-            }
-            
+            // 콘솔 출력은 즉시
             Console.WriteLine(fullMessage);
+            
+            // UI 업데이트는 비동기로 (메인 루프 차단 방지)
+            Task.Run(() =>
+            {
+                try
+                {
+                    if (Root.InvokeRequired)
+                    {
+                        Root.Invoke(new Action(() =>
+                        {
+                            try
+                            {
+                                if (logTextBox != null && !logTextBox.IsDisposed)
+                                {
+                                    logTextBox.AppendText(fullMessage + Environment.NewLine);
+                                    
+                                    // 로그가 너무 길어지면 앞부분 제거 (메모리 절약)
+                                    if (logTextBox.Lines.Length > 100)
+                                    {
+                                        var lines = logTextBox.Lines.Skip(20).ToArray();
+                                        logTextBox.Lines = lines;
+                                    }
+                                    
+                                    logTextBox.SelectionStart = logTextBox.Text.Length;
+                                    logTextBox.ScrollToCaret();
+                                }
+                            }
+                            catch { } // UI 업데이트 실패해도 무시
+                        }));
+                    }
+                }
+                catch { } // 전체 실패해도 무시
+            });
         }
 
         private void UpdateStats()
         {
-            if (stats["start_time"] != null)
+            try
             {
-                var runtime = (int)(DateTime.Now - (DateTime)stats["start_time"]).TotalSeconds;
-                var minutes = runtime / 60;
-                var seconds = runtime % 60;
-                
-                if (Root.InvokeRequired)
+                if (stats["start_time"] != null)
                 {
-                    Root.Invoke(new Action(() =>
+                    var runtime = (int)(DateTime.Now - (DateTime)stats["start_time"]).TotalSeconds;
+                    var minutes = runtime / 60;
+                    var seconds = runtime % 60;
+                    
+                    if (Root.InvokeRequired)
                     {
-                        statsLabels["runtime"].Text = $"{minutes:D2}:{seconds:D2}";
-                        statsLabels["frames_processed"].Text = stats["frames_processed"].ToString();
-                        statsLabels["objects_detected"].Text = stats["objects_detected"].ToString();
-                        statsLabels["mosaic_applied"].Text = stats["mosaic_applied"].ToString();
-                    }));
+                        Root.Invoke(new Action(() =>
+                        {
+                            try
+                            {
+                                if (statsLabels.ContainsKey("runtime"))
+                                    statsLabels["runtime"].Text = $"{minutes:D2}:{seconds:D2}";
+                                if (statsLabels.ContainsKey("frames_processed"))
+                                    statsLabels["frames_processed"].Text = stats["frames_processed"].ToString();
+                                if (statsLabels.ContainsKey("objects_detected"))
+                                    statsLabels["objects_detected"].Text = stats["objects_detected"].ToString();
+                                if (statsLabels.ContainsKey("mosaic_applied"))
+                                    statsLabels["mosaic_applied"].Text = stats["mosaic_applied"].ToString();
+                            }
+                            catch { } // UI 업데이트 실패해도 메인 루프에 영향 없도록
+                        }));
+                    }
                 }
             }
+            catch { } // 통계 업데이트 실패해도 무시
         }
 
         private void StartCensoring(object sender, EventArgs e)
@@ -589,9 +621,17 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             processor.SetTargets(selectedTargets);
             processor.SetStrength(strengthSlider.Value);
             processor.ConfThreshold = confidenceSlider.Value / 10.0f;
+            
+            LogMessage($"🔍 현재 작업 디렉토리: {Environment.CurrentDirectory}");
+            LogMessage($"🔍 실행 파일 디렉토리: {AppDomain.CurrentDomain.BaseDirectory}");
+            LogMessage($"🔍 예상 모델 경로: {Program.ONNX_MODEL_PATH}");
+            LogMessage($"🔍 파일 존재 여부: {System.IO.File.Exists(Program.ONNX_MODEL_PATH)}");
+
             if (!processor.IsModelLoaded())
             {
-                LogMessage(" ONNX 모델이 로드되지 않았습니다!");
+                LogMessage("❌ ONNX 모델이 로드되지 않았습니다!");
+                LogMessage("🔍 모델 로딩 중 에러가 발생했을 가능성이 높습니다");
+                LogMessage("🔍 가능한 원인: 1) ONNX Runtime 문제 2) 모델 파일 손상 3) 권한 문제");
                 MessageBox.Show("ONNX 모델 로딩 실패!");
                 return;
             }
@@ -685,8 +725,24 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
 
         private void ProcessingLoop()
         {
-            LogMessage("🔄 전체 화면 모자이크 처리 루프 시작");
+            LogMessage("🔄 성능 최적화된 전체 화면 모자이크 처리 루프 시작");
             int frameCount = 0;
+            
+            // 성능 최적화 변수들
+            DateTime lastStatsUpdate = DateTime.Now;
+            DateTime lastLogTime = DateTime.Now;
+            
+            // Mat 객체 재사용을 위한 풀 (GC 압박 감소)
+            var matPool = new Queue<Mat>();
+            const int maxPoolSize = 5;
+            
+            // UI 업데이트 주기 제어 (UI 스레드 부하 감소)
+            int uiUpdateCounter = 0;
+            const int uiUpdateInterval = 10; // 10프레임마다 UI 업데이트
+            
+            // 디버그 저장 주기 제어
+            int debugSaveCounter = 0;
+            const int debugSaveInterval = 180; // 6초마다 (30fps 기준)
             
             try
             {
@@ -695,68 +751,121 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                     var originalFrame = capturer.GetFrame();
                     if (originalFrame == null || originalFrame.Empty())
                     {
-                        Thread.Sleep(10);
+                        Thread.Sleep(1);
                         continue;
                     }
                     
                     frameCount++;
                     stats["frames_processed"] = frameCount;
                     
-                    var processedFrame = originalFrame.Clone();
+                    // Mat 풀에서 재사용 가능한 객체 가져오기 (메모리 할당 최소화)
+                    Mat processedFrame;
+                    if (matPool.Count > 0)
+                    {
+                        processedFrame = matPool.Dequeue();
+                        originalFrame.CopyTo(processedFrame);
+                    }
+                    else
+                    {
+                        processedFrame = originalFrame.Clone();
+                    }
                     
                     var detections = processor.DetectObjects(originalFrame);
                     
                     if (detections != null && detections.Count > 0)
                     {
-                        foreach (var detection in detections)
+                        // 병렬 처리로 모자이크 적용 속도 향상
+                        var targetDetections = detections.Where(d => processor.Targets.Contains(d.ClassName)).ToList();
+                        
+                        if (targetDetections.Count > 0)
                         {
-                            var className = detection.ClassName;
-                            var confidence = detection.Confidence;
-                            var bbox = detection.BBox;
-                            int x1 = bbox[0], y1 = bbox[1], x2 = bbox[2], y2 = bbox[3];
-                            
-                            stats["objects_detected"] = (int)stats["objects_detected"] + 1;
-                            
-                            if (processor.Targets.Contains(className))
+                            // 작은 영역들은 묶어서 처리 (컨텍스트 스위칭 비용 감소)
+                            if (targetDetections.Count <= 2)
                             {
-                                stats["mosaic_applied"] = (int)stats["mosaic_applied"] + 1;
-                                
-                                using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                                // 적은 수의 감지는 순차 처리 (오버헤드 방지)
+                                foreach (var detection in targetDetections)
                                 {
-                                    if (!region.Empty())
-                                    {
-                                        var mosaicRegion = processor.ApplyMosaic(region, strengthSlider.Value);
-                                        mosaicRegion.CopyTo(region);
-                                        mosaicRegion.Dispose();
-                                        
-                                        if (frameCount % 30 == 0)
-                                        {
-                                            LogMessage($"🎯 모자이크 적용: {className}");
-                                        }
-                                    }
+                                    ApplySingleMosaic(processedFrame, detection);
                                 }
                             }
+                            else
+                            {
+                                // 많은 수의 감지는 병렬 처리
+                                Parallel.ForEach(targetDetections, detection =>
+                                {
+                                    lock (processedFrame) // 동기화
+                                    {
+                                        ApplySingleMosaic(processedFrame, detection);
+                                    }
+                                });
+                            }
+                            
+                            stats["mosaic_applied"] = (int)stats["mosaic_applied"] + targetDetections.Count;
+                        }
+                        
+                        stats["objects_detected"] = (int)stats["objects_detected"] + detections.Count;
+                    }
+                    
+                    // 오버레이 업데이트 (항상 실행으로 실시간성 보장)
+                    overlay.UpdateFrame(processedFrame);
+                    
+                    // Mat 객체 풀에 반환 (재사용을 위해)
+                    if (matPool.Count < maxPoolSize)
+                    {
+                        matPool.Enqueue(processedFrame);
+                    }
+                    else
+                    {
+                        processedFrame.Dispose();
+                    }
+                    
+                    // UI 업데이트 주기 제어 (UI 스레드 부하 감소)
+                    uiUpdateCounter++;
+                    if (uiUpdateCounter >= uiUpdateInterval)
+                    {
+                        uiUpdateCounter = 0;
+                        
+                        // 통계 업데이트 (비동기로 UI 스레드 부하 감소)
+                        Task.Run(() => UpdateStats());
+                        
+                        // 로그 메시지 주기 제어
+                        var now = DateTime.Now;
+                        if ((now - lastLogTime).TotalSeconds >= 5) // 5초마다 로그
+                        {
+                            lastLogTime = now;
+                            var fps = frameCount / (now - (DateTime)stats["start_time"]).TotalSeconds;
+                            Task.Run(() => LogMessage($"🎯 처리 중: {frameCount}프레임, {fps:F1}fps, 감지:{stats["objects_detected"]}, 모자이크:{stats["mosaic_applied"]}"));
                         }
                     }
                     
-                    overlay.UpdateFrame(processedFrame);
-                    
-                    if (debugMode && (int)stats["mosaic_applied"] > 0)
+                    // 디버그 저장 주기 제어 (I/O 부하 감소)
+                    if (debugMode)
                     {
-                        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-                        
-                        var originalPath = $"debug_detection/original_{timestamp}.jpg";
-                        var processedPath = $"debug_detection/processed_{timestamp}.jpg";
-                        
-                        Cv2.ImWrite(originalPath, originalFrame);
-                        Cv2.ImWrite(processedPath, processedFrame);
+                        debugSaveCounter++;
+                        if (debugSaveCounter >= debugSaveInterval && (int)stats["mosaic_applied"] > 0)
+                        {
+                            debugSaveCounter = 0;
+                            
+                            // 비동기로 디버그 이미지 저장 (메인 루프 차단 방지)
+                            var debugFrame = originalFrame.Clone();
+                            Task.Run(() =>
+                            {
+                                try
+                                {
+                                    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                                    var processedPath = $"debug_detection/processed_{timestamp}.jpg";
+                                    Cv2.ImWrite(processedPath, debugFrame, new ImageEncodingParam(ImwriteFlags.JpegQuality, 80));
+                                }
+                                catch { }
+                                finally
+                                {
+                                    debugFrame.Dispose();
+                                }
+                            });
+                        }
                     }
                     
-                    if (frameCount % 30 == 0)
-                    {
-                        UpdateStats();
-                    }
-                    
+                    // 오버레이 창 상태 확인 (가벼운 체크)
                     if (!overlay.IsWindowVisible())
                     {
                         isRunning = false;
@@ -764,9 +873,10 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                     }
                     
                     originalFrame.Dispose();
-                    processedFrame.Dispose();
                     
-                    Thread.Sleep(1000 / fpsSlider.Value);
+                    // FPS 제한 (CPU 사용률 조절)
+                    var targetFrameTime = 1000 / fpsSlider.Value;
+                    Thread.Sleep(Math.Max(1, targetFrameTime - 5)); // 약간의 여유
                 }
             }
             catch (Exception ex)
@@ -775,6 +885,12 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             }
             finally
             {
+                // Mat 풀 정리
+                while (matPool.Count > 0)
+                {
+                    matPool.Dequeue().Dispose();
+                }
+                
                 if (Root.InvokeRequired)
                 {
                     Root.Invoke(new Action(() => StopCensoring(null, null)));
@@ -783,6 +899,34 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 {
                     StopCensoring(null, null);
                 }
+            }
+        }
+
+        // 단일 모자이크 적용 메서드 (성능 최적화)
+        private void ApplySingleMosaic(Mat processedFrame, MosaicCensorSystem.Detection.Detection detection)
+        {
+            try
+            {
+                var bbox = detection.BBox;
+                int x1 = bbox[0], y1 = bbox[1], x2 = bbox[2], y2 = bbox[3];
+                
+                if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= processedFrame.Width && y2 <= processedFrame.Height)
+                {
+                    using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                    {
+                        if (!region.Empty())
+                        {
+                            using (var mosaicRegion = processor.ApplyMosaic(region, strengthSlider.Value))
+                            {
+                                mosaicRegion.CopyTo(region);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ 단일 모자이크 적용 오류: {ex.Message}");
             }
         }
 

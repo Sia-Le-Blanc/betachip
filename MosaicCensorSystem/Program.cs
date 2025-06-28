@@ -49,7 +49,7 @@ namespace MosaicCensorSystem
         public static string ResourcePath(string relativePath)
         {
             // 실행 파일이 있는 디렉토리를 기준으로 경로 설정
-            string basePath = AppDomain.CurrentDomain.BaseDirectory;
+            string basePath = Environment.CurrentDirectory;
             return Path.Combine(basePath, relativePath);
         }
     }

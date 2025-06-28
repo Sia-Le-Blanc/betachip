@@ -79,38 +79,68 @@ namespace MosaicCensorSystem.Detection
 
         public MosaicProcessor(string? modelPath = null, Dictionary<string, object>? config = null)
         {
+            Console.WriteLine("🔍 MosaicProcessor 생성자 시작");
             this.config = config ?? new Dictionary<string, object>();
             
-            // 모델 경로 설정
-            this.modelPath = modelPath ?? Program.ONNX_MODEL_PATH;
-            if (!System.IO.File.Exists(this.modelPath))
-            {
-                Console.WriteLine($" 모델 파일을 찾을 수 없습니다: {this.modelPath}");
-            }
-
             Console.WriteLine($"🔍 현재 작업 디렉토리: {Environment.CurrentDirectory}");
             Console.WriteLine($"🔍 실행 파일 디렉토리: {AppDomain.CurrentDomain.BaseDirectory}");
-            Console.WriteLine($"🔍 모델 경로: {this.modelPath}");
-            Console.WriteLine($"🔍 파일 존재 여부: {System.IO.File.Exists(this.modelPath)}");
-            // YOLO 모델 로드
-            try
+
+            // 모델 경로 설정
+            this.modelPath = modelPath ?? "Resources/best.onnx";
+            Console.WriteLine($"🔍 첫 번째 모델 경로: {this.modelPath}");
+            Console.WriteLine($"🔍 첫 번째 파일 존재: {System.IO.File.Exists(this.modelPath)}");
+
+            if (!System.IO.File.Exists(this.modelPath))
             {
-                Console.WriteLine($"🤖 YOLO 모델 로딩 중: {this.modelPath}");
-                var sessionOptions = new SessionOptions
+                this.modelPath = modelPath ?? Program.ONNX_MODEL_PATH;
+                Console.WriteLine($"🔍 두 번째 모델 경로: {this.modelPath}");
+                Console.WriteLine($"🔍 두 번째 파일 존재: {System.IO.File.Exists(this.modelPath)}");
+            }
+
+    
+            // YOLO 모델 로드
+        // YOLO 모델 로드
+        try
+        {
+            Console.WriteLine($"🤖 YOLO 모델 로딩 중: {this.modelPath}");
+            
+            // GPU 시도 -> CPU 폴백
+            SessionOptions? sessionOptions = null;
+            
+            try 
+            {
+                // GPU 시도
+                sessionOptions = new SessionOptions();
+                sessionOptions.AppendExecutionProvider_CUDA(0);
+                sessionOptions.EnableCpuMemArena = false;
+                sessionOptions.EnableMemoryPattern = false;
+                
+                model = new InferenceSession(this.modelPath, sessionOptions);
+                Console.WriteLine("✅ YOLO 모델 로드 성공 (GPU)");
+            }
+            catch
+            {
+                Console.WriteLine("⚠️ GPU 로딩 실패, CPU로 시도 중...");
+                
+                // CPU 폴백
+                sessionOptions?.Dispose(); // 이전 세션 정리
+                sessionOptions = new SessionOptions
                 {
                     EnableCpuMemArena = false,
                     EnableMemoryPattern = false,
-                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_BASIC
                 };
-
+                
                 model = new InferenceSession(this.modelPath, sessionOptions);
-                Console.WriteLine("✅ YOLO 모델 로드 성공");
+                Console.WriteLine("✅ YOLO 모델 로드 성공 (CPU)");
             }
-            catch (Exception e)
-            {
-                Console.WriteLine($"❌ YOLO 모델 로드 실패: {e.Message}");
-                model = null;
-            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"❌ YOLO 모델 로드 실패: {e.Message}");
+            model = null;
+            System.IO.File.WriteAllText("onnx_error.txt", $"Error: {e.Message}\nStackTrace: {e.StackTrace}");
+        }
 
             // 설정값들 초기화
             ConfThreshold = 0.1f;
@@ -222,54 +252,81 @@ namespace MosaicCensorSystem.Detection
             }
         }
 
+        
+        // MosaicProcessor.cs의 PostprocessOutput 메서드를 이것으로 완전히 교체하세요
         private List<Detection> PostprocessOutput(float[] output, int originalWidth, int originalHeight)
         {
             var detections = new List<Detection>();
 
             try
             {
-                // YOLO 출력 형태 추정: [1, 25200, 20] (20 = 4 bbox + 1 confidence + 15 classes)
-                int numDetections = output.Length / 20;
+                Console.WriteLine($"🔍 출력 파싱 시작: 배열 길이 {output.Length}");
                 
-                for (int i = 0; i < numDetections; i++)
+                // YOLOv8 출력 형태: [1, 19, 8400] -> 평면화되어 [19 * 8400] 배열
+                // 19 = 4(bbox) + 1(conf) + 14(classes)
+                // 8400 = 감지 박스 수
+                
+                const int numFeatures = 19;    // 특징 수 (4 + 1 + 14)
+                const int numDetections = 8400; // 감지 박스 수
+                const int numClasses = 14;      // 실제 클래스 수 (19 - 5)
+                
+                if (output.Length != numFeatures * numDetections)
                 {
-                    int baseIndex = i * 20;
-                    
-                    // 범위 확인
-                    if (baseIndex + 19 >= output.Length) break;
-                    
-                    // 바운딩 박스 (중심점 + 크기)
-                    float centerX = output[baseIndex + 0];
-                    float centerY = output[baseIndex + 1];
-                    float width = output[baseIndex + 2];
-                    float height = output[baseIndex + 3];
-                    float objectConfidence = output[baseIndex + 4];
+                    Console.WriteLine($"❌ 예상치 못한 출력 크기: {output.Length}, 예상: {numFeatures * numDetections}");
+                    return detections;
+                }
 
-                    // 클래스별 확률
+                Console.WriteLine($"📊 감지 박스 처리 시작: {numDetections}개");
+                
+                // [1, 19, 8400] 형식에서 각 감지 박스 처리
+                for (int detIndex = 0; detIndex < numDetections; detIndex++)
+                {
+                    // 각 감지에 대해 19개 특징 추출
+                    // 출력이 [feature0_det0, feature0_det1, ..., feature0_det8399, feature1_det0, ...] 형식
+                    
+                    // 좌표 추출 (feature 0~3: x, y, w, h)
+                    float centerX = output[0 * numDetections + detIndex]; // feature 0
+                    float centerY = output[1 * numDetections + detIndex]; // feature 1  
+                    float width = output[2 * numDetections + detIndex];   // feature 2
+                    float height = output[3 * numDetections + detIndex];  // feature 3
+                    
+                    // 객체 신뢰도 (feature 4)
+                    float objectConfidence = output[4 * numDetections + detIndex];
+
+                    // 디버그 출력 (처음 5개만)
+                    if (detIndex < 5)
+                    {
+                        Console.WriteLine($"감지 {detIndex}: x={centerX:F2}, y={centerY:F2}, w={width:F2}, h={height:F2}, conf={objectConfidence:F4}");
+                    }
+
+                    // 클래스별 확률 추출 (feature 5~18: 14개 클래스)
                     float maxClassProb = 0;
                     int maxClassIndex = 0;
                     
-                    for (int j = 0; j < 15; j++)
+                    for (int classIndex = 0; classIndex < numClasses; classIndex++)
                     {
-                        if (baseIndex + 5 + j < output.Length)
+                        float classProb = output[(5 + classIndex) * numDetections + detIndex];
+                        if (classProb > maxClassProb)
                         {
-                            float classProb = output[baseIndex + 5 + j];
-                            if (classProb > maxClassProb)
-                            {
-                                maxClassProb = classProb;
-                                maxClassIndex = j;
-                            }
+                            maxClassProb = classProb;
+                            maxClassIndex = classIndex;
                         }
                     }
 
-                    float confidence = objectConfidence * maxClassProb;
-
-                    if (confidence >= ConfThreshold)
+                    // 방법 1: 클래스 확률만으로 판단 (신뢰도 무시)
+                    if (maxClassProb > 0.1f) // 클래스 확률만 체크
                     {
+                        // 클래스 이름 확인
+                        if (maxClassIndex >= classNames.Count)
+                            continue;
+                            
+                        string className = classNames[maxClassIndex];
+
                         // 좌표 변환 (640x640 -> 원본 크기)
                         float scaleX = originalWidth / 640.0f;
                         float scaleY = originalHeight / 640.0f;
 
+                        // 중심점 + 크기 -> 좌상단 + 우하단
                         int x1 = (int)((centerX - width / 2) * scaleX);
                         int y1 = (int)((centerY - height / 2) * scaleY);
                         int x2 = (int)((centerX + width / 2) * scaleX);
@@ -281,35 +338,73 @@ namespace MosaicCensorSystem.Detection
                         x2 = Math.Max(0, Math.Min(x2, originalWidth - 1));
                         y2 = Math.Max(0, Math.Min(y2, originalHeight - 1));
 
-                        if (x2 > x1 && y2 > y1 && maxClassIndex < classNames.Count)
+                        // 최소 크기 검증
+                        int boxWidth = x2 - x1;
+                        int boxHeight = y2 - y1;
+                        
+                        if (boxWidth > 10 && boxHeight > 10) // 최소 10x10 픽셀
                         {
+                            // 유효한 감지 결과 추가
                             var detection = new Detection
                             {
-                                ClassName = classNames[maxClassIndex],
-                                Confidence = confidence,
+                                ClassName = className,
+                                Confidence = maxClassProb, // 클래스 확률을 신뢰도로 사용
                                 BBox = new int[] { x1, y1, x2, y2 },
                                 ClassId = maxClassIndex
                             };
                             detections.Add(detection);
+                            
+                            // 유효한 감지만 로깅 (처음 10개만)
+                            if (detections.Count <= 10)
+                            {
+                                Console.WriteLine($"✅ 감지: {className} ({maxClassProb:F3}) at [{x1},{y1},{x2},{y2}]");
+                            }
                         }
                     }
                 }
 
-                // NMS (Non-Maximum Suppression) 적용
-                detections = ApplyNMS(detections, 0.4f);
+                Console.WriteLine($"📊 1차 감지 완료: {detections.Count}개");
+
+                // NMS 적용 (너무 많은 감지 결과 정리)
+                if (detections.Count > 0)
+                {
+                    detections = ApplyNMS(detections);
+                    Console.WriteLine($"📊 NMS 후 최종: {detections.Count}개");
+                }
 
                 return detections;
             }
             catch (Exception e)
             {
                 Console.WriteLine($"❌ 후처리 오류: {e.Message}");
+                Console.WriteLine($"❌ 스택 트레이스: {e.StackTrace}");
                 return new List<Detection>();
             }
         }
-
-        private List<Detection> ApplyNMS(List<Detection> detections, float nmsThreshold)
+        // 개선된 NMS 메서드 (기존 ApplyNMS를 이것으로 교체)
+        private List<Detection> ApplyNMS(List<Detection> detections)
         {
             if (detections.Count == 0) return detections;
+
+            // 클래스별 NMS 임계값
+            var nmsThresholds = new Dictionary<string, float>
+            {
+                ["얼굴"] = 0.3f,
+                ["가슴"] = 0.4f,
+                ["보지"] = 0.3f,
+                ["자지"] = 0.3f,
+                ["팬티"] = 0.4f,
+                ["눈"] = 0.2f,
+                ["손"] = 0.5f,
+                ["발"] = 0.5f,
+                ["몸 전체"] = 0.6f,
+                ["여성"] = 0.7f,
+                ["겨드랑이"] = 0.4f,
+                ["신발"] = 0.5f,
+                ["가슴_옷"] = 0.4f,
+                ["보지_옷"] = 0.4f,
+                ["교미"] = 0.3f
+            };
 
             // 신뢰도 순으로 정렬
             detections = detections.OrderByDescending(d => d.Confidence).ToList();
@@ -321,20 +416,27 @@ namespace MosaicCensorSystem.Detection
                 keep.Add(current);
                 detections.RemoveAt(0);
 
+                // 해당 클래스의 NMS 임계값 가져오기
+                float nmsThreshold = nmsThresholds.GetValueOrDefault(current.ClassName, 0.4f);
+
                 // IoU 계산하여 겹치는 박스 제거
                 for (int i = detections.Count - 1; i >= 0; i--)
                 {
-                    float iou = CalculateIoU(current.BBox, detections[i].BBox);
-                    if (iou > nmsThreshold)
+                    // 같은 클래스끼리만 NMS 적용
+                    if (detections[i].ClassName == current.ClassName)
                     {
-                        detections.RemoveAt(i);
+                        float iou = CalculateIoU(current.BBox, detections[i].BBox);
+                        if (iou > nmsThreshold)
+                        {
+                            detections.RemoveAt(i);
+                        }
                     }
                 }
             }
 
             return keep;
         }
-
+        
         private float CalculateIoU(int[] box1, int[] box2)
         {
             int x1 = Math.Max(box1[0], box2[0]);
