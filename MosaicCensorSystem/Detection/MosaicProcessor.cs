@@ -82,12 +82,16 @@ namespace MosaicCensorSystem.Detection
             this.config = config ?? new Dictionary<string, object>();
             
             // 모델 경로 설정
-            this.modelPath = modelPath ?? "Resources/best.onnx";
+            this.modelPath = modelPath ?? Program.ONNX_MODEL_PATH;
             if (!System.IO.File.Exists(this.modelPath))
             {
-                this.modelPath = Program.ONNX_MODEL_PATH;
+                Console.WriteLine($" 모델 파일을 찾을 수 없습니다: {this.modelPath}");
             }
 
+            Console.WriteLine($"🔍 현재 작업 디렉토리: {Environment.CurrentDirectory}");
+            Console.WriteLine($"🔍 실행 파일 디렉토리: {AppDomain.CurrentDomain.BaseDirectory}");
+            Console.WriteLine($"🔍 모델 경로: {this.modelPath}");
+            Console.WriteLine($"🔍 파일 존재 여부: {System.IO.File.Exists(this.modelPath)}");
             // YOLO 모델 로드
             try
             {
@@ -98,7 +102,7 @@ namespace MosaicCensorSystem.Detection
                     EnableMemoryPattern = false,
                     GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_EXTENDED
                 };
-                
+
                 model = new InferenceSession(this.modelPath, sessionOptions);
                 Console.WriteLine("✅ YOLO 모델 로드 성공");
             }
