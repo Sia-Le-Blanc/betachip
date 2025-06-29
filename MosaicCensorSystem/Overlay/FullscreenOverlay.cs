@@ -1,3 +1,4 @@
+#nullable disable
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -83,7 +84,6 @@ namespace MosaicCensorSystem.Overlay
 
         private Thread displayThread;
         private Thread topmostThread;
-        private readonly object frameLock = new object();
         private readonly CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
         private bool forceTopmost = false;
 
@@ -391,7 +391,7 @@ namespace MosaicCensorSystem.Overlay
                             ForceToTopmost();
                         }
                         
-                        Thread.Sleep(50);
+                        Thread.Sleep(30); // 더 빠른 체크로 응답성 향상
                     }
                     catch
                     {
@@ -457,7 +457,7 @@ namespace MosaicCensorSystem.Overlay
 
         public void UpdateFrame(Mat processedFrame)
         {
-            lock (frameLock)
+            lock (this)
             {
                 currentFrame?.Dispose();
                 currentFrame = processedFrame?.Clone();
@@ -484,7 +484,9 @@ namespace MosaicCensorSystem.Overlay
                         }
 
                         UpdateFps();
-                        Thread.Sleep(1000 / fpsLimit);
+                        
+                        // 응답성 향상: 대기시간 단축
+                        Thread.Sleep(0);
                     }
                     catch (Exception e)
                     {
@@ -510,7 +512,7 @@ namespace MosaicCensorSystem.Overlay
 
             bufferGraphics.Clear(Color.Black);
 
-            lock (frameLock)
+            lock (this)
             {
                 if (currentFrame != null && !currentFrame.Empty())
                 {
@@ -570,7 +572,7 @@ namespace MosaicCensorSystem.Overlay
                     g.DrawString(hookText, debugFont, Brushes.Yellow, 10, y);
                     y += 30;
 
-                    string guideText = "Click anything! ZERO flickering guaranteed!";
+                    string guideText = "Click anything! Fast response guaranteed!";
                     var guideSize = g.MeasureString(guideText, debugFont);
                     g.FillRectangle(bgBrush, 10, y, guideSize.Width, guideSize.Height);
                     g.DrawString(guideText, debugFont, Brushes.Cyan, 10, y);

@@ -28,11 +28,7 @@ namespace MosaicCensorSystem
         private Label statusLabel;
         private Dictionary<string, CheckBox> targetCheckBoxes = new Dictionary<string, CheckBox>();
         private TrackBar strengthSlider;
-        private TrackBar confidenceSlider;
-        private TrackBar fpsSlider;
         private Label strengthLabel;
-        private Label confidenceLabel;
-        private Label fpsLabel;
         private TextBox logTextBox;
         private Dictionary<string, Label> statsLabels = new Dictionary<string, Label>();
         private CheckBox debugCheckBox;
@@ -43,6 +39,10 @@ namespace MosaicCensorSystem
         private bool isRunning = false;
         private Thread processThread;
         private bool debugMode = false;
+        
+        // 고정값들
+        private const float FIXED_CONFIDENCE = 0.35f;
+        private const int FIXED_FPS = 60;
         
         private Dictionary<string, object> stats = new Dictionary<string, object>
         {
@@ -59,7 +59,7 @@ namespace MosaicCensorSystem
         {
             Root = new Form
             {
-                Text = "실시간 화면 검열 시스템 v3.0 (풀스크린 + 캡처 방지)",
+                Text = "실시간 화면 검열 시스템 v3.1 (CUDA 자동감지 + 최적화)",
                 Size = new System.Drawing.Size(500, 600),
                 MinimumSize = new System.Drawing.Size(450, 400),
                 StartPosition = FormStartPosition.CenterScreen
@@ -81,7 +81,7 @@ namespace MosaicCensorSystem
         {
             var titleLabel = new Label
             {
-                Text = "🛡️ 풀스크린 화면 검열 시스템",
+                Text = "🛡️ 풀스크린 화면 검열 시스템 (CUDA 자동)",
                 Font = new Font("Arial", 14, FontStyle.Bold),
                 BackColor = Color.LightBlue,
                 BorderStyle = BorderStyle.Fixed3D,
@@ -170,7 +170,7 @@ namespace MosaicCensorSystem
             
             var infoGroup = new GroupBox
             {
-                Text = "🚀 최종 완성 버전!",
+                Text = "🚀 CUDA 자동감지 최적화 버전!",
                 Location = new System.Drawing.Point(10, y),
                 Size = new System.Drawing.Size(460, 130)
             };
@@ -179,8 +179,8 @@ namespace MosaicCensorSystem
 🖥️ 전체 화면 매끄러운 모자이크 표시
 🖱️ 클릭 투과로 바탕화면 상호작용 가능
 📌 Windows Hook으로 창 활성화 즉시 차단
-⚡ 플리커링 없는 안정적인 검열 시스템
-✅ 실시간 객체 감지 및 모자이크 적용";
+⚡ CUDA 우선, CPU 자동 폴백으로 최고 성능
+✅ 고정 설정 (FPS: 60, 신뢰도: 0.35)";
             
             var infoLabel = new Label
             {
@@ -219,7 +219,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             {
                 Text = "🎯 모자이크 대상 선택",
                 Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 180)
+                Size = new System.Drawing.Size(460, 240)
             };
             
             var availableTargets = new[]
@@ -231,31 +231,33 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             var defaultTargets = Config.Get<List<string>>("mosaic", "default_targets", new List<string>());
             
+            // 개선된 체크박스 레이아웃 (3열)
             for (int i = 0; i < availableTargets.Length; i++)
             {
                 var target = availableTargets[i];
-                var row = i / 2;
-                var col = i % 2;
+                var row = i / 3;  // 3열로 배치
+                var col = i % 3;
                 
                 var checkbox = new CheckBox
                 {
                     Text = target,
                     Checked = defaultTargets.Contains(target),
-                    Location = new System.Drawing.Point(10 + col * 220, 25 + row * 25),
-                    AutoSize = true
+                    Location = new System.Drawing.Point(15 + col * 145, 30 + row * 30),
+                    Size = new System.Drawing.Size(140, 25),
+                    AutoSize = false
                 };
                 
                 targetCheckBoxes[target] = checkbox;
                 targetsGroup.Controls.Add(checkbox);
             }
             parent.Controls.Add(targetsGroup);
-            y += 190;
+            y += 250; // 확장된 높이
             
             var settingsGroup = new GroupBox
             {
                 Text = "⚙️ 모자이크 설정",
                 Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 150)
+                Size = new System.Drawing.Size(460, 80)
             };
             
             var strengthTextLabel = new Label
@@ -286,64 +288,19 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             };
             settingsGroup.Controls.Add(strengthLabel);
             
-            var confidenceTextLabel = new Label
+            // 고정 설정 안내 라벨
+            var fixedSettingsLabel = new Label
             {
-                Text = "감지 신뢰도:",
-                Location = new System.Drawing.Point(10, 65),
+                Text = $"🔧 고정 설정: FPS={FIXED_FPS}, 신뢰도={FIXED_CONFIDENCE}",
+                ForeColor = Color.Blue,
+                Font = new Font("Arial", 9, FontStyle.Bold),
+                Location = new System.Drawing.Point(10, 55),
                 AutoSize = true
             };
-            settingsGroup.Controls.Add(confidenceTextLabel);
-            
-            confidenceSlider = new TrackBar
-            {
-                Minimum = 1,
-                Maximum = 9,
-                Value = (int)(Config.Get<double>("mosaic", "conf_threshold", 0.1) * 10),
-                TickFrequency = 1,
-                Location = new System.Drawing.Point(120, 60),
-                Size = new System.Drawing.Size(280, 45)
-            };
-            confidenceSlider.ValueChanged += UpdateConfidenceLabel;
-            settingsGroup.Controls.Add(confidenceSlider);
-            
-            confidenceLabel = new Label
-            {
-                Text = "0.1",
-                Location = new System.Drawing.Point(410, 65),
-                AutoSize = true
-            };
-            settingsGroup.Controls.Add(confidenceLabel);
-            
-            var fpsTextLabel = new Label
-            {
-                Text = "FPS 제한:",
-                Location = new System.Drawing.Point(10, 105),
-                AutoSize = true
-            };
-            settingsGroup.Controls.Add(fpsTextLabel);
-            
-            fpsSlider = new TrackBar
-            {
-                Minimum = 15,
-                Maximum = 60,
-                Value = 30,
-                TickFrequency = 5,
-                Location = new System.Drawing.Point(120, 100),
-                Size = new System.Drawing.Size(280, 45)
-            };
-            fpsSlider.ValueChanged += UpdateFpsLabel;
-            settingsGroup.Controls.Add(fpsSlider);
-            
-            fpsLabel = new Label
-            {
-                Text = "30",
-                Location = new System.Drawing.Point(410, 105),
-                AutoSize = true
-            };
-            settingsGroup.Controls.Add(fpsLabel);
+            settingsGroup.Controls.Add(fixedSettingsLabel);
             
             parent.Controls.Add(settingsGroup);
-            y += 160;
+            y += 90;
             
             var controlPanel = new Panel
             {
@@ -501,16 +458,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             strengthLabel.Text = strengthSlider.Value.ToString();
         }
 
-        private void UpdateConfidenceLabel(object sender, EventArgs e)
-        {
-            confidenceLabel.Text = $"{confidenceSlider.Value / 10.0:F1}";
-        }
-
-        private void UpdateFpsLabel(object sender, EventArgs e)
-        {
-            fpsLabel.Text = fpsSlider.Value.ToString();
-        }
-
         private void LogMessage(string message)
         {
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
@@ -597,7 +544,9 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 if (kvp.Value.Checked)
                     selectedTargets.Add(kvp.Key);
             }
-            
+
+            LogMessage($"🎯 선택된 타겟들: {string.Join(", ", selectedTargets)}");
+
             if (selectedTargets.Count == 0)
             {
                 MessageBox.Show("최소 하나의 모자이크 대상을 선택해주세요!", "경고", 
@@ -620,7 +569,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             processor.SetTargets(selectedTargets);
             processor.SetStrength(strengthSlider.Value);
-            processor.ConfThreshold = confidenceSlider.Value / 10.0f;
+            processor.ConfThreshold = FIXED_CONFIDENCE;
             
             LogMessage($"🔍 현재 작업 디렉토리: {Environment.CurrentDirectory}");
             LogMessage($"🔍 실행 파일 디렉토리: {AppDomain.CurrentDomain.BaseDirectory}");
@@ -639,7 +588,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             debugMode = debugCheckBox.Checked;
             
             overlay.ShowDebugInfo = showDebugInfoCheckBox.Checked;
-            overlay.SetFpsLimit(fpsSlider.Value);
+            overlay.SetFpsLimit(FIXED_FPS);
             
             isRunning = true;
             stats["start_time"] = DateTime.Now;
@@ -662,12 +611,13 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             processThread = new Thread(ProcessingLoop)
             {
                 Name = "ProcessingThread",
-                IsBackground = true
+                IsBackground = true,
+                Priority = ThreadPriority.Highest
             };
             processThread.Start();
             
             LogMessage($"🚀 화면 검열 시작! 대상: {string.Join(", ", selectedTargets)}");
-            LogMessage($"⚙️ 설정: 강도={strengthSlider.Value}, 신뢰도={confidenceSlider.Value / 10.0:F2}, FPS={fpsSlider.Value}");
+            LogMessage($"⚙️ 설정: 강도={strengthSlider.Value}, 신뢰도={FIXED_CONFIDENCE}, FPS={FIXED_FPS}");
             
             ThreadPool.QueueUserWorkItem(_ =>
             {
@@ -725,7 +675,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
 
         private void ProcessingLoop()
         {
-            LogMessage("🔄 성능 최적화된 전체 화면 모자이크 처리 루프 시작");
+            LogMessage("🔄 CUDA 자동감지 고성능 처리 루프 시작");
             int frameCount = 0;
             
             // 성능 최적화 변수들
@@ -738,11 +688,11 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             // UI 업데이트 주기 제어 (UI 스레드 부하 감소)
             int uiUpdateCounter = 0;
-            const int uiUpdateInterval = 10; // 10프레임마다 UI 업데이트
+            const int uiUpdateInterval = 5;
             
             // 디버그 저장 주기 제어
             int debugSaveCounter = 0;
-            const int debugSaveInterval = 180; // 6초마다 (30fps 기준)
+            const int debugSaveInterval = 180;
             
             try
             {
@@ -758,7 +708,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                     frameCount++;
                     stats["frames_processed"] = frameCount;
                     
-                    // Mat 풀에서 재사용 가능한 객체 가져오기 (메모리 할당 최소화)
+                    // Mat 풀에서 재사용 가능한 객체 가져오기
                     Mat processedFrame;
                     if (matPool.Count > 0)
                     {
@@ -774,15 +724,21 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                     
                     if (detections != null && detections.Count > 0)
                     {
-                        // 병렬 처리로 모자이크 적용 속도 향상
-                        var targetDetections = detections.Where(d => processor.Targets.Contains(d.ClassName)).ToList();
+                        // 개선된 타겟 매칭 (부분 문자열 포함)
+                        var targetDetections = detections.Where(d => 
+                            processor.Targets.Contains(d.ClassName) || 
+                            processor.Targets.Any(target => d.ClassName.Contains(target) || target.Contains(d.ClassName))
+                        ).ToList();
+                        
+                        LogMessage($"🔍 전체 감지: {string.Join(", ", detections.Select(d => d.ClassName))}");
+                        LogMessage($"🎯 현재 타겟: {string.Join(", ", processor.Targets)}");
+                        LogMessage($"✅ 모자이크 대상: {string.Join(", ", targetDetections.Select(d => d.ClassName))}");
                         
                         if (targetDetections.Count > 0)
                         {
-                            // 작은 영역들은 묶어서 처리 (컨텍스트 스위칭 비용 감소)
+                            // 순차 또는 병렬 처리 선택
                             if (targetDetections.Count <= 2)
                             {
-                                // 적은 수의 감지는 순차 처리 (오버헤드 방지)
                                 foreach (var detection in targetDetections)
                                 {
                                     ApplySingleMosaic(processedFrame, detection);
@@ -790,10 +746,9 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                             }
                             else
                             {
-                                // 많은 수의 감지는 병렬 처리
                                 Parallel.ForEach(targetDetections, detection =>
                                 {
-                                    lock (processedFrame) // 동기화
+                                    lock (processedFrame)
                                     {
                                         ApplySingleMosaic(processedFrame, detection);
                                     }
@@ -806,10 +761,10 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         stats["objects_detected"] = (int)stats["objects_detected"] + detections.Count;
                     }
                     
-                    // 오버레이 업데이트 (항상 실행으로 실시간성 보장)
+                    // 오버레이 업데이트
                     overlay.UpdateFrame(processedFrame);
                     
-                    // Mat 객체 풀에 반환 (재사용을 위해)
+                    // Mat 객체 풀에 반환
                     if (matPool.Count < maxPoolSize)
                     {
                         matPool.Enqueue(processedFrame);
@@ -819,18 +774,16 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         processedFrame.Dispose();
                     }
                     
-                    // UI 업데이트 주기 제어 (UI 스레드 부하 감소)
+                    // UI 업데이트 주기 제어
                     uiUpdateCounter++;
                     if (uiUpdateCounter >= uiUpdateInterval)
                     {
                         uiUpdateCounter = 0;
                         
-                        // 통계 업데이트 (비동기로 UI 스레드 부하 감소)
                         Task.Run(() => UpdateStats());
                         
-                        // 로그 메시지 주기 제어
                         var now = DateTime.Now;
-                        if ((now - lastLogTime).TotalSeconds >= 5) // 5초마다 로그
+                        if ((now - lastLogTime).TotalSeconds >= 10)
                         {
                             lastLogTime = now;
                             var fps = frameCount / (now - (DateTime)stats["start_time"]).TotalSeconds;
@@ -838,7 +791,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         }
                     }
                     
-                    // 디버그 저장 주기 제어 (I/O 부하 감소)
+                    // 디버그 저장 주기 제어
                     if (debugMode)
                     {
                         debugSaveCounter++;
@@ -846,7 +799,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         {
                             debugSaveCounter = 0;
                             
-                            // 비동기로 디버그 이미지 저장 (메인 루프 차단 방지)
                             var debugFrame = originalFrame.Clone();
                             Task.Run(() =>
                             {
@@ -865,7 +817,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         }
                     }
                     
-                    // 오버레이 창 상태 확인 (가벼운 체크)
+                    // 오버레이 창 상태 확인
                     if (!overlay.IsWindowVisible())
                     {
                         isRunning = false;
@@ -874,9 +826,8 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                     
                     originalFrame.Dispose();
                     
-                    // FPS 제한 (CPU 사용률 조절)
-                    var targetFrameTime = 1000 / fpsSlider.Value;
-                    Thread.Sleep(Math.Max(1, targetFrameTime - 5)); // 약간의 여유
+                    // 즉시 반응을 위한 최소 대기
+                    Thread.Sleep(0);
                 }
             }
             catch (Exception ex)
@@ -902,7 +853,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             }
         }
 
-        // 단일 모자이크 적용 메서드 (성능 최적화)
+        // 단일 모자이크 적용 메서드
         private void ApplySingleMosaic(Mat processedFrame, MosaicCensorSystem.Detection.Detection detection)
         {
             try
@@ -932,8 +883,8 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
 
         public void Run()
         {
-            Console.WriteLine("🛡️ 화면 검열 시스템 시작");
-            Console.WriteLine("=" + new string('=', 39));
+            Console.WriteLine("🛡️ CUDA 자동감지 화면 검열 시스템 시작");
+            Console.WriteLine("=" + new string('=', 45));
             
             try
             {
