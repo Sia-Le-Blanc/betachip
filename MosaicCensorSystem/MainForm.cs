@@ -673,9 +673,11 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             LogMessage("✅ 화면 검열 중지됨");
         }
 
+        // MainForm.cs의 ProcessingLoop 메서드에서 수정할 부분
+
         private void ProcessingLoop()
         {
-            LogMessage("🔄 CUDA 자동감지 고성능 처리 루프 시작");
+            LogMessage("🔄 CUDA 자동감지 + SortTracker 고성능 처리 루프 시작");
             int frameCount = 0;
             
             // 성능 최적화 변수들
@@ -720,6 +722,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         processedFrame = originalFrame.Clone();
                     }
                     
+                    // SortTracker가 포함된 감지 수행
                     var detections = processor.DetectObjects(originalFrame);
                     
                     if (detections != null && detections.Count > 0)
@@ -730,35 +733,28 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                             processor.Targets.Any(target => d.ClassName.Contains(target) || target.Contains(d.ClassName))
                         ).ToList();
                         
-                        LogMessage($"🔍 전체 감지: {string.Join(", ", detections.Select(d => d.ClassName))}");
-                        LogMessage($"🎯 현재 타겟: {string.Join(", ", processor.Targets)}");
-                        LogMessage($"✅ 모자이크 대상: {string.Join(", ", targetDetections.Select(d => d.ClassName))}");
-                        
+                        // 로깅 최적화 - 중요한 정보만 출력
                         if (targetDetections.Count > 0)
                         {
-                            // 순차 또는 병렬 처리 선택
-                            if (targetDetections.Count <= 2)
+                            LogMessage($"🎯 모자이크 대상 감지: {targetDetections.Count}개 (트래킹 ID: {string.Join(",", targetDetections.Select(d => d.TrackId))})");
+                            
+                            // 캐싱 최적화된 모자이크 적용
+                            foreach (var detection in targetDetections)
                             {
-                                foreach (var detection in targetDetections)
-                                {
-                                    ApplySingleMosaic(processedFrame, detection);
-                                }
-                            }
-                            else
-                            {
-                                Parallel.ForEach(targetDetections, detection =>
-                                {
-                                    lock (processedFrame)
-                                    {
-                                        ApplySingleMosaic(processedFrame, detection);
-                                    }
-                                });
+                                processor.ApplySingleMosaicOptimized(processedFrame, detection);
                             }
                             
                             stats["mosaic_applied"] = (int)stats["mosaic_applied"] + targetDetections.Count;
                         }
                         
                         stats["objects_detected"] = (int)stats["objects_detected"] + detections.Count;
+                        
+                        // 성능 통계 정보 로깅 (트래킹 정보 포함)
+                        if (frameCount % 100 == 0)
+                        {
+                            var perfStats = processor.GetPerformanceStats();
+                            LogMessage($"📊 성능: 캐시 적중률 {(perfStats.CacheHits * 100.0 / Math.Max(1, perfStats.CacheHits + perfStats.CacheMisses)):F1}%, 트래킹 객체: {perfStats.TrackedObjects}개");
+                        }
                     }
                     
                     // 오버레이 업데이트
@@ -787,7 +783,8 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         {
                             lastLogTime = now;
                             var fps = frameCount / (now - (DateTime)stats["start_time"]).TotalSeconds;
-                            Task.Run(() => LogMessage($"🎯 처리 중: {frameCount}프레임, {fps:F1}fps, 감지:{stats["objects_detected"]}, 모자이크:{stats["mosaic_applied"]}"));
+                            var perfStats = processor.GetPerformanceStats();
+                            Task.Run(() => LogMessage($"🎯 처리: {frameCount}프레임, {fps:F1}fps, 감지:{stats["objects_detected"]}, 모자이크:{stats["mosaic_applied"]}, 트래킹:{perfStats.TrackedObjects}"));
                         }
                     }
                     
@@ -853,33 +850,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             }
         }
 
-        // 단일 모자이크 적용 메서드
-        private void ApplySingleMosaic(Mat processedFrame, MosaicCensorSystem.Detection.Detection detection)
-        {
-            try
-            {
-                var bbox = detection.BBox;
-                int x1 = bbox[0], y1 = bbox[1], x2 = bbox[2], y2 = bbox[3];
-                
-                if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= processedFrame.Width && y2 <= processedFrame.Height)
-                {
-                    using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
-                    {
-                        if (!region.Empty())
-                        {
-                            using (var mosaicRegion = processor.ApplyMosaic(region, strengthSlider.Value))
-                            {
-                                mosaicRegion.CopyTo(region);
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"⚠️ 단일 모자이크 적용 오류: {ex.Message}");
-            }
-        }
+        // 기존의 ApplySingleMosaic 메서드는 제거하고, processor.ApplySingleMosaicOptimized를 사용합니다.
 
         public void Run()
         {

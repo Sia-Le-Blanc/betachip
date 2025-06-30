@@ -8,7 +8,7 @@ using OpenCvSharp;
 namespace MosaicCensorSystem.Detection
 {
     /// <summary>
-    /// 객체 감지 결과를 나타내는 클래스
+    /// 객체 감지 결과를 나타내는 클래스 (트래킹 ID 추가)
     /// </summary>
     public class Detection
     {
@@ -16,6 +16,27 @@ namespace MosaicCensorSystem.Detection
         public float Confidence { get; set; }
         public int[] BBox { get; set; } = new int[4]; // [x1, y1, x2, y2]
         public int ClassId { get; set; }
+        public int TrackId { get; set; } = -1; // 트래킹 ID 추가
+        public bool IsStable { get; set; } = false; // 안정적인 감지인지 여부
+    }
+
+    /// <summary>
+    /// 트래킹된 객체 정보 (모자이크 캐싱용)
+    /// </summary>
+    public class TrackedObject
+    {
+        public int TrackId { get; set; }
+        public string ClassName { get; set; } = "";
+        public Rect2d BoundingBox { get; set; }
+        public float LastConfidence { get; set; }
+        public int StableFrameCount { get; set; } = 0;
+        public Mat? CachedMosaicRegion { get; set; }
+        public DateTime LastUpdated { get; set; } = DateTime.Now;
+        
+        public void Dispose()
+        {
+            CachedMosaicRegion?.Dispose();
+        }
     }
 
     /// <summary>
@@ -26,6 +47,9 @@ namespace MosaicCensorSystem.Detection
         public double AvgDetectionTime { get; set; }
         public double Fps { get; set; }
         public int LastDetectionsCount { get; set; }
+        public int CacheHits { get; set; }
+        public int CacheMisses { get; set; }
+        public int TrackedObjects { get; set; }
     }
 
     /// <summary>
@@ -50,7 +74,7 @@ namespace MosaicCensorSystem.Detection
     }
 
     /// <summary>
-    /// CUDA 자동감지 및 최적화된 모자이크 프로세서
+    /// CUDA 자동감지 및 최적화된 모자이크 프로세서 (SortTracker 추가)
     /// </summary>
     public class MosaicProcessor : IProcessor, IDisposable
     {
@@ -58,6 +82,17 @@ namespace MosaicCensorSystem.Detection
         private InferenceSession? model;
         private readonly string modelPath;
         private string accelerationMode = "Unknown";
+
+        // 트래킹 시스템 추가
+        private readonly SortTracker tracker = new SortTracker();
+        private readonly Dictionary<int, TrackedObject> trackedObjects = new Dictionary<int, TrackedObject>();
+        private readonly object trackingLock = new object();
+
+        // 성능 최적화 설정
+        private const int STABLE_FRAME_THRESHOLD = 5; // 안정적 감지로 간주할 프레임 수
+        private const int CACHE_CLEANUP_INTERVAL = 30; // 캐시 정리 간격 (프레임)
+        private const double CACHE_REGION_THRESHOLD = 0.1; // 영역 변화 임계값
+        private int frameCounter = 0;
 
         // 설정값들
         public float ConfThreshold { get; set; }
@@ -76,10 +111,12 @@ namespace MosaicCensorSystem.Detection
         private readonly List<double> detectionTimes = new List<double>();
         private List<Detection> lastDetections = new List<Detection>();
         private readonly object statsLock = new object();
+        private int cacheHits = 0;
+        private int cacheMisses = 0;
 
         public MosaicProcessor(string? modelPath = null, Dictionary<string, object>? config = null)
         {
-            Console.WriteLine("🔍 CUDA 자동감지 MosaicProcessor 초기화");
+            Console.WriteLine("🔍 CUDA 자동감지 + SortTracker MosaicProcessor 초기화");
             this.config = config ?? new Dictionary<string, object>();
             
             // 모델 경로 설정
@@ -100,6 +137,7 @@ namespace MosaicCensorSystem.Detection
             Console.WriteLine($"🎯 기본 타겟: {string.Join(", ", Targets)}");
             Console.WriteLine($"⚙️ 기본 설정: 강도={Strength}, 신뢰도={ConfThreshold}");
             Console.WriteLine($"🚀 가속 모드: {accelerationMode}");
+            Console.WriteLine($"📊 SortTracker 활성화 - 모자이크 캐싱으로 성능 향상");
         }
 
         private void LoadModelWithAutoFallback()
@@ -160,10 +198,6 @@ namespace MosaicCensorSystem.Detection
                 sessionOptions.InterOpNumThreads = Environment.ProcessorCount;
                 sessionOptions.IntraOpNumThreads = Environment.ProcessorCount;
                 sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-                
-                // CUDA 메모리 최적화 (AddConfigEntry 제거)
-                // sessionOptions.AddConfigEntry("memory.enable_memory_arena_shrinkage", "");
-                // sessionOptions.AddConfigEntry("session.disable_cpu_ep_fallback", "1");
                 
                 model = new InferenceSession(this.modelPath, sessionOptions);
                 
@@ -309,6 +343,7 @@ namespace MosaicCensorSystem.Detection
             try
             {
                 var startTime = DateTime.Now;
+                frameCounter++;
 
                 // 전처리
                 var inputTensor = PreprocessFrame(frame);
@@ -328,7 +363,10 @@ namespace MosaicCensorSystem.Detection
                     return new List<Detection>();
 
                 // 후처리
-                var detections = PostprocessOutput(output, frame.Width, frame.Height);
+                var rawDetections = PostprocessOutput(output, frame.Width, frame.Height);
+
+                // SortTracker 적용
+                var trackedDetections = ApplyTracking(rawDetections);
 
                 // 성능 통계 업데이트
                 var detectionTime = (DateTime.Now - startTime).TotalSeconds;
@@ -339,15 +377,208 @@ namespace MosaicCensorSystem.Detection
                     {
                         detectionTimes.RemoveRange(0, detectionTimes.Count - 50);
                     }
-                    lastDetections = detections;
+                    lastDetections = trackedDetections;
                 }
 
-                return detections;
+                // 주기적으로 캐시 정리
+                if (frameCounter % CACHE_CLEANUP_INTERVAL == 0)
+                {
+                    CleanupExpiredTracks();
+                }
+
+                return trackedDetections;
             }
             catch (Exception e)
             {
                 Console.WriteLine($"❌ 객체 감지 오류: {e.Message}");
                 return new List<Detection>();
+            }
+        }
+
+        /// <summary>
+        /// SortTracker를 사용한 트래킹 적용
+        /// </summary>
+        private List<Detection> ApplyTracking(List<Detection> rawDetections)
+        {
+            lock (trackingLock)
+            {
+                // Detection을 Rect2d로 변환
+                var detectionBoxes = rawDetections.Select(d => new Rect2d(
+                    d.BBox[0], d.BBox[1], 
+                    d.BBox[2] - d.BBox[0], 
+                    d.BBox[3] - d.BBox[1]
+                )).ToList();
+
+                // SortTracker 업데이트
+                var trackedResults = tracker.Update(detectionBoxes);
+
+                var trackedDetections = new List<Detection>();
+
+                for (int i = 0; i < Math.Min(rawDetections.Count, trackedResults.Count); i++)
+                {
+                    var detection = rawDetections[i];
+                    var (trackId, trackedBox) = trackedResults[i];
+
+                    detection.TrackId = trackId;
+
+                    // 트래킹된 객체 정보 업데이트
+                    if (!trackedObjects.ContainsKey(trackId))
+                    {
+                        trackedObjects[trackId] = new TrackedObject
+                        {
+                            TrackId = trackId,
+                            ClassName = detection.ClassName,
+                            BoundingBox = trackedBox,
+                            LastConfidence = detection.Confidence,
+                            StableFrameCount = 1,
+                            LastUpdated = DateTime.Now
+                        };
+                    }
+                    else
+                    {
+                        var trackedObj = trackedObjects[trackId];
+                        
+                        // 영역 변화 계산
+                        double areaChange = Math.Abs(trackedBox.Width * trackedBox.Height - 
+                                                   trackedObj.BoundingBox.Width * trackedObj.BoundingBox.Height) /
+                                          (trackedObj.BoundingBox.Width * trackedObj.BoundingBox.Height);
+
+                        // 안정적인 감지인지 판단
+                        if (areaChange < CACHE_REGION_THRESHOLD && 
+                            detection.ClassName == trackedObj.ClassName)
+                        {
+                            trackedObj.StableFrameCount++;
+                        }
+                        else
+                        {
+                            trackedObj.StableFrameCount = 1;
+                            // 영역이 많이 변했으면 캐시 무효화
+                            trackedObj.CachedMosaicRegion?.Dispose();
+                            trackedObj.CachedMosaicRegion = null;
+                        }
+
+                        trackedObj.BoundingBox = trackedBox;
+                        trackedObj.LastConfidence = detection.Confidence;
+                        trackedObj.LastUpdated = DateTime.Now;
+                    }
+
+                    // 안정성 플래그 설정
+                    detection.IsStable = trackedObjects[trackId].StableFrameCount >= STABLE_FRAME_THRESHOLD;
+
+                    trackedDetections.Add(detection);
+                }
+
+                return trackedDetections;
+            }
+        }
+
+        /// <summary>
+        /// 만료된 트랙 정리
+        /// </summary>
+        private void CleanupExpiredTracks()
+        {
+            lock (trackingLock)
+            {
+                var expiredTracks = trackedObjects.Where(kvp => 
+                    (DateTime.Now - kvp.Value.LastUpdated).TotalSeconds > 2.0
+                ).Select(kvp => kvp.Key).ToList();
+
+                foreach (var trackId in expiredTracks)
+                {
+                    trackedObjects[trackId].Dispose();
+                    trackedObjects.Remove(trackId);
+                }
+
+                if (expiredTracks.Count > 0)
+                {
+                    Console.WriteLine($"🧹 만료된 트랙 정리: {expiredTracks.Count}개");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 캐싱 최적화된 모자이크 적용 메서드 (MainForm.cs에서 사용)
+        /// </summary>
+        public void ApplySingleMosaicOptimized(Mat processedFrame, Detection detection)
+        {
+            try
+            {
+                var bbox = detection.BBox;
+                int x1 = bbox[0], y1 = bbox[1], x2 = bbox[2], y2 = bbox[3];
+                
+                if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= processedFrame.Width && y2 <= processedFrame.Height)
+                {
+                    lock (trackingLock)
+                    {
+                        // 트래킹된 객체이고 안정적인 경우 캐시 사용
+                        if (detection.TrackId != -1 && trackedObjects.ContainsKey(detection.TrackId))
+                        {
+                            var trackedObj = trackedObjects[detection.TrackId];
+
+                            // 안정적인 객체이고 캐시된 모자이크가 있는 경우
+                            if (detection.IsStable && trackedObj.CachedMosaicRegion != null)
+                            {
+                                try
+                                {
+                                    using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                                    {
+                                        // 캐시된 모자이크 크기가 현재 영역과 일치하는지 확인
+                                        if (trackedObj.CachedMosaicRegion.Width == (x2 - x1) && 
+                                            trackedObj.CachedMosaicRegion.Height == (y2 - y1))
+                                        {
+                                            trackedObj.CachedMosaicRegion.CopyTo(region);
+                                            cacheHits++;
+                                            return;
+                                        }
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    Console.WriteLine($"⚠️ 캐시된 모자이크 적용 실패: {e.Message}");
+                                }
+                            }
+
+                            // 캐시 미스 - 새로운 모자이크 생성 및 캐싱
+                            using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                            {
+                                if (!region.Empty())
+                                {
+                                    using (var mosaicRegion = ApplyMosaic(region, Strength))
+                                    {
+                                        mosaicRegion.CopyTo(region);
+
+                                        // 안정적인 객체인 경우 모자이크 캐싱
+                                        if (detection.IsStable)
+                                        {
+                                            trackedObj.CachedMosaicRegion?.Dispose();
+                                            trackedObj.CachedMosaicRegion = mosaicRegion.Clone();
+                                        }
+                                    }
+                                    cacheMisses++;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // 트래킹되지 않은 객체 - 일반 모자이크 적용
+                            using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                            {
+                                if (!region.Empty())
+                                {
+                                    using (var mosaicRegion = ApplyMosaic(region, Strength))
+                                    {
+                                        mosaicRegion.CopyTo(region);
+                                    }
+                                }
+                            }
+                            cacheMisses++;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ 최적화된 모자이크 적용 오류: {ex.Message}");
             }
         }
 
@@ -546,18 +777,8 @@ namespace MosaicCensorSystem.Detection
             {
                 if (Targets.Contains(detection.ClassName))
                 {
-                    int x1 = detection.BBox[0], y1 = detection.BBox[1];
-                    int x2 = detection.BBox[2], y2 = detection.BBox[3];
-
-                    if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= frame.Width && y2 <= frame.Height)
-                    {
-                        using var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1));
-                        if (!region.Empty())
-                        {
-                            using var mosaicRegion = ApplyMosaic(region, Strength);
-                            mosaicRegion.CopyTo(region);
-                        }
-                    }
+                    // 최적화된 모자이크 적용 사용
+                    ApplySingleMosaicOptimized(processedFrame, detection);
                 }
             }
 
@@ -624,7 +845,10 @@ namespace MosaicCensorSystem.Detection
                     {
                         AvgDetectionTime = 0,
                         Fps = 0,
-                        LastDetectionsCount = 0
+                        LastDetectionsCount = 0,
+                        CacheHits = 0,
+                        CacheMisses = 0,
+                        TrackedObjects = 0
                     };
                 }
 
@@ -635,7 +859,10 @@ namespace MosaicCensorSystem.Detection
                 {
                     AvgDetectionTime = avgTime,
                     Fps = fps,
-                    LastDetectionsCount = lastDetections.Count
+                    LastDetectionsCount = lastDetections.Count,
+                    CacheHits = cacheHits,
+                    CacheMisses = cacheMisses,
+                    TrackedObjects = trackedObjects.Count
                 };
             }
         }
@@ -678,8 +905,20 @@ namespace MosaicCensorSystem.Detection
             {
                 detectionTimes.Clear();
                 lastDetections.Clear();
+                cacheHits = 0;
+                cacheMisses = 0;
             }
-            Console.WriteLine("📊 성능 통계 초기화됨");
+            
+            lock (trackingLock)
+            {
+                foreach (var trackedObj in trackedObjects.Values)
+                {
+                    trackedObj.Dispose();
+                }
+                trackedObjects.Clear();
+            }
+            
+            Console.WriteLine("📊 성능 통계 및 트래킹 캐시 초기화됨");
         }
 
         public string GetAccelerationMode()
@@ -689,8 +928,18 @@ namespace MosaicCensorSystem.Detection
 
         public void Dispose()
         {
+            // 트래킹된 객체들 정리
+            lock (trackingLock)
+            {
+                foreach (var trackedObj in trackedObjects.Values)
+                {
+                    trackedObj.Dispose();
+                }
+                trackedObjects.Clear();
+            }
+            
             model?.Dispose();
-            Console.WriteLine($"🧹 {accelerationMode} MosaicProcessor 리소스 정리됨");
+            Console.WriteLine($"🧹 {accelerationMode} MosaicProcessor + SortTracker 리소스 정리됨");
         }
     }
 }

@@ -1,3 +1,4 @@
+#nullable disable
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -15,14 +16,24 @@ namespace MosaicCensorSystem.UI
 
         public void Connect(Action callback)
         {
-            callbacks.Add(callback);
+            if (callback != null)
+            {
+                callbacks.Add(callback);
+            }
         }
 
         public void Emit()
         {
             foreach (var callback in callbacks)
             {
-                callback?.Invoke();
+                try
+                {
+                    callback?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"⚠️ 신호 실행 오류: {ex.Message}");
+                }
             }
         }
     }
@@ -39,7 +50,7 @@ namespace MosaicCensorSystem.UI
         public string RenderModeInfo { get; private set; }
 
         // UI 컨트롤
-        private Dictionary<string, CheckBox> checkboxes = new Dictionary<string, CheckBox>();
+        private readonly Dictionary<string, CheckBox> checkboxes = new Dictionary<string, CheckBox>();
         private Label statusLabel;
         private Label renderModeLabel;
         private TrackBar strengthSlider;
@@ -60,15 +71,21 @@ namespace MosaicCensorSystem.UI
 
         public MainWindow(Dictionary<string, object> config = null)
         {
-            if (config == null)
-            {
-                config = Config.GetSection("mosaic");
-            }
+            config ??= Config.GetSection("mosaic");
 
             // 설정 초기화
             Strength = Convert.ToInt32(config.GetValueOrDefault("default_strength", 25));
-            Targets = (config.GetValueOrDefault("default_targets", new List<string> { "얼굴", "가슴", "보지", "팬티" }) as List<string>)
-                ?? new List<string> { "얼굴", "가슴", "보지", "팬티" };
+            
+            var defaultTargets = new List<string> { "얼굴", "가슴", "보지", "팬티" };
+            if (config.GetValueOrDefault("default_targets", defaultTargets) is List<string> targets)
+            {
+                Targets = targets;
+            }
+            else
+            {
+                Targets = defaultTargets;
+            }
+            
             Running = false;
             RenderModeInfo = "기본 모드";
 
@@ -77,6 +94,9 @@ namespace MosaicCensorSystem.UI
             Size = new Size(400, 600);
             MinimumSize = new Size(350, 400);
             StartPosition = FormStartPosition.CenterScreen;
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MaximizeBox = true;
+            MinimizeBox = true;
 
             // UI 생성
             CreateWidgets();
@@ -84,6 +104,8 @@ namespace MosaicCensorSystem.UI
 
         private void CreateWidgets()
         {
+            SuspendLayout();
+
             // 드래그 가능한 제목 바
             var titlePanel = new Panel
             {
@@ -138,10 +160,17 @@ namespace MosaicCensorSystem.UI
 
             // 실제 내용 생성
             CreateContent(scrollableContainer.ScrollableFrame);
+
+            ResumeLayout(false);
+            PerformLayout();
         }
 
         private void CreateContent(Panel parent)
         {
+            if (parent == null) return;
+
+            parent.SuspendLayout();
+
             // 메인 패널
             var mainPanel = new Panel
             {
@@ -198,7 +227,7 @@ namespace MosaicCensorSystem.UI
                 "가슴_옷", "보지_옷", "여성"
             };
 
-            int checkY = 20;
+            const int checkY = 20;
             for (int i = 0; i < options.Length; i++)
             {
                 var option = options[i];
@@ -265,7 +294,8 @@ namespace MosaicCensorSystem.UI
                 ForeColor = Color.White,
                 Font = new Font("Arial", 14, FontStyle.Bold),
                 Size = new Size(140, 60),
-                Location = new Point(20, 20)
+                Location = new Point(20, 20),
+                UseVisualStyleBackColor = false
             };
             startButton.Click += OnStartClicked;
 
@@ -276,7 +306,8 @@ namespace MosaicCensorSystem.UI
                 ForeColor = Color.White,
                 Font = new Font("Arial", 14, FontStyle.Bold),
                 Size = new Size(140, 60),
-                Location = new Point(190, 20)
+                Location = new Point(190, 20),
+                UseVisualStyleBackColor = false
             };
             stopButton.Click += OnStopClicked;
 
@@ -333,7 +364,6 @@ namespace MosaicCensorSystem.UI
                 testGroup.Controls.Add(label);
                 testY += 20;
             }
-            y += 170;
 
             // 컨트롤 추가
             mainPanel.Controls.Add(strengthLabel);
@@ -346,6 +376,8 @@ namespace MosaicCensorSystem.UI
             mainPanel.Controls.Add(testGroup);
 
             parent.Controls.Add(mainPanel);
+            parent.ResumeLayout(false);
+            parent.PerformLayout();
         }
 
         private void OnTitleMouseDown(object sender, MouseEventArgs e)
@@ -373,14 +405,26 @@ namespace MosaicCensorSystem.UI
 
         private void OnStrengthChanged(object sender, EventArgs e)
         {
-            Strength = strengthSlider.Value;
-            strengthLabel.Text = $"모자이크 강도: {Strength}";
+            if (sender is TrackBar slider)
+            {
+                Strength = slider.Value;
+                if (strengthLabel != null)
+                {
+                    strengthLabel.Text = $"모자이크 강도: {Strength}";
+                }
+            }
         }
 
         private void OnConfidenceChanged(object sender, EventArgs e)
         {
-            float confidence = confidenceSlider.Value / 10.0f;
-            confidenceLabel.Text = $"감지 신뢰도: {confidence:F1}";
+            if (sender is TrackBar slider)
+            {
+                float confidence = slider.Value / 10.0f;
+                if (confidenceLabel != null)
+                {
+                    confidenceLabel.Text = $"감지 신뢰도: {confidence:F1}";
+                }
+            }
         }
 
         private void OnStartClicked(object sender, EventArgs e)
@@ -390,17 +434,27 @@ namespace MosaicCensorSystem.UI
             Targets = GetSelectedTargets();
             Console.WriteLine($"🎯 선택된 타겟: {string.Join(", ", Targets)}");
 
-            statusLabel.Text = "✅ 검열 중";
-            statusLabel.ForeColor = Color.Green;
-
-            if (StartCallback != null)
+            if (statusLabel != null)
             {
-                Console.WriteLine("✅ 검열 시작 콜백 실행");
-                StartCallback();
+                statusLabel.Text = "✅ 검열 중";
+                statusLabel.ForeColor = Color.Green;
             }
-            else
+
+            try
             {
-                Console.WriteLine("⚠️ 검열 시작 콜백이 설정되지 않았습니다");
+                if (StartCallback != null)
+                {
+                    Console.WriteLine("✅ 검열 시작 콜백 실행");
+                    StartCallback();
+                }
+                else
+                {
+                    Console.WriteLine("⚠️ 검열 시작 콜백이 설정되지 않았습니다");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ 시작 콜백 실행 오류: {ex.Message}");
             }
         }
 
@@ -409,36 +463,51 @@ namespace MosaicCensorSystem.UI
             Console.WriteLine("🖱️ 검열 중지 버튼 클릭됨");
             Running = false;
 
-            statusLabel.Text = "⭕ 대기 중";
-            statusLabel.ForeColor = Color.Red;
-
-            if (StopCallback != null)
+            if (statusLabel != null)
             {
-                Console.WriteLine("✅ 검열 중지 콜백 실행");
-                StopCallback();
+                statusLabel.Text = "⭕ 대기 중";
+                statusLabel.ForeColor = Color.Red;
             }
-            else
+
+            try
             {
-                Console.WriteLine("⚠️ 검열 중지 콜백이 설정되지 않았습니다");
+                if (StopCallback != null)
+                {
+                    Console.WriteLine("✅ 검열 중지 콜백 실행");
+                    StopCallback();
+                }
+                else
+                {
+                    Console.WriteLine("⚠️ 검열 중지 콜백이 설정되지 않았습니다");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ 중지 콜백 실행 오류: {ex.Message}");
             }
         }
 
         public List<string> GetSelectedTargets()
         {
             var selected = new List<string>();
+            
             foreach (var kvp in checkboxes)
             {
-                if (kvp.Value.Checked)
+                if (kvp.Value?.Checked == true)
                 {
                     selected.Add(kvp.Key);
                 }
             }
 
+            // 아무것도 선택되지 않았으면 첫 번째 항목 선택
             if (selected.Count == 0 && checkboxes.Count > 0)
             {
                 var firstKey = checkboxes.Keys.First();
-                checkboxes[firstKey].Checked = true;
-                selected.Add(firstKey);
+                if (checkboxes[firstKey] != null)
+                {
+                    checkboxes[firstKey].Checked = true;
+                    selected.Add(firstKey);
+                }
             }
 
             return selected;
@@ -451,24 +520,42 @@ namespace MosaicCensorSystem.UI
 
         public void SetRenderModeInfo(string infoText)
         {
-            RenderModeInfo = infoText;
+            RenderModeInfo = infoText ?? "기본 모드";
+            
             if (renderModeLabel != null)
             {
-                renderModeLabel.Text = infoText;
+                renderModeLabel.Text = RenderModeInfo;
             }
         }
 
-        public void Run()
+        public new void Show()
         {
             try
             {
-                Application.Run(this);
+                base.Show();
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Console.WriteLine($"❌ Windows Forms 메인 루프 오류: {e.Message}");
-                Console.WriteLine(e.StackTrace);
+                Console.WriteLine($"❌ 창 표시 오류: {ex.Message}");
             }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // 컨트롤들 정리
+                strengthSlider?.Dispose();
+                confidenceSlider?.Dispose();
+                scrollableContainer?.Dispose();
+                
+                foreach (var checkbox in checkboxes.Values)
+                {
+                    checkbox?.Dispose();
+                }
+                checkboxes.Clear();
+            }
+            base.Dispose(disposing);
         }
     }
 
@@ -491,6 +578,16 @@ namespace MosaicCensorSystem.UI
             TopMost = true;
 
             Console.WriteLine("✅ Windows Forms GUI 컨트롤러 초기화 완료 (간단한 스크롤)");
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                StartCensoringSignal?.Emit();
+                StopCensoringSignal?.Emit();
+            }
+            base.Dispose(disposing);
         }
     }
 }
