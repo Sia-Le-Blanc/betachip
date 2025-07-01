@@ -214,7 +214,7 @@ namespace MosaicCensorSystem.Capture
                             }
                         }
 
-                        frameQueue.TryAdd(frame.Clone());
+                        frameQueue.TryAdd(frame);
                         frame.Dispose();
                         retryCount = 0;
                     }
@@ -262,7 +262,11 @@ namespace MosaicCensorSystem.Capture
 
                 BitBlt(memoryDC, 0, 0, screenWidth, screenHeight, desktopDC, screenLeft, screenTop, SRCCOPY);
 
-                screenBitmap = Image.FromHbitmap(bitmap);
+                using (bitmap tempBitmap = bitmap.FromHbitmap(bitmap))
+                {
+                    bitmap cloneBitmap = new bitmap(tempBitmap);
+                    screenBitmap = cloneBitmap;
+                }
                 Mat img = BitmapConverter.ToMat(screenBitmap);
 
                 // BGRA -> BGR 변환 (필요한 경우)

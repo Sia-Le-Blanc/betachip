@@ -89,7 +89,7 @@ namespace MosaicCensorSystem.Detection
         private readonly object trackingLock = new object();
 
         // 성능 최적화 설정
-        private const int STABLE_FRAME_THRESHOLD = 5; // 안정적 감지로 간주할 프레임 수
+        private const int STABLE_FRAME_THRESHOLD = 2; // 안정적 감지로 간주할 프레임 수
         private const int CACHE_CLEANUP_INTERVAL = 30; // 캐시 정리 간격 (프레임)
         private const double CACHE_REGION_THRESHOLD = 0.1; // 영역 변화 임계값
         private int frameCounter = 0;
@@ -665,8 +665,11 @@ namespace MosaicCensorSystem.Detection
                     {
                         string className = classNames[maxClassIndex];
 
+                        if (!Targets.Contains(classNmae))
+                            continue;
+
                         // 좌표 변환
-                        float scaleX = originalWidth / 640.0f;
+                            float scaleX = originalWidth / 640.0f;
                         float scaleY = originalHeight / 640.0f;
 
                         int x1 = (int)((centerX - width / 2) * scaleX);
