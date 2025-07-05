@@ -391,7 +391,7 @@ namespace MosaicCensorSystem.Overlay
                             ForceToTopmost();
                         }
                         
-                        Thread.Sleep(30); // 더 빠른 체크로 응답성 향상
+                        Thread.Sleep(1); // 더 빠른 체크로 응답성 향상
                     }
                     catch
                     {
@@ -459,8 +459,15 @@ namespace MosaicCensorSystem.Overlay
         {
             lock (this)
             {
-                currentFrame?.Dispose();
-                currentFrame = processedFrame?.Clone();
+                if (currentFrame == null || currentFrame.Size() != processedFrame.Size())
+                {
+                    currentFrame?.Dispose();
+                    currentFrame = processedFrame.Clone();
+                }
+                else
+                {
+                    processedFrame.CopyTo(currentFrame);
+                }
             }
         }
 

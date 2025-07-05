@@ -29,6 +29,8 @@ namespace MosaicCensorSystem
         private Dictionary<string, CheckBox> targetCheckBoxes = new Dictionary<string, CheckBox>();
         private TrackBar strengthSlider;
         private Label strengthLabel;
+        private TrackBar confidenceSlider; // 추가된 신뢰도 슬라이더
+        private Label confidenceLabel; // 추가된 신뢰도 라벨
         private TextBox logTextBox;
         private Dictionary<string, Label> statsLabels = new Dictionary<string, Label>();
         private CheckBox debugCheckBox;
@@ -40,9 +42,9 @@ namespace MosaicCensorSystem
         private Thread processThread;
         private bool debugMode = false;
         
-        // 고정값들
-        private const float FIXED_CONFIDENCE = 0.35f;
+        // 수정된 고정값들 - 신뢰도는 UI에서 설정 가능하도록 변경
         private const int FIXED_FPS = 60;
+        private float currentConfidence = 0.2f; // 기본값을 0.2로 설정
         
         private Dictionary<string, object> stats = new Dictionary<string, object>
         {
@@ -60,8 +62,8 @@ namespace MosaicCensorSystem
             Root = new Form
             {
                 Text = "실시간 화면 검열 시스템 v3.1 (CUDA 자동감지 + 최적화)",
-                Size = new System.Drawing.Size(500, 600),
-                MinimumSize = new System.Drawing.Size(450, 400),
+                Size = new System.Drawing.Size(500, 700), // 높이 증가
+                MinimumSize = new System.Drawing.Size(450, 500), // 최소 높이 증가
                 StartPosition = FormStartPosition.CenterScreen
             };
             
@@ -180,7 +182,7 @@ namespace MosaicCensorSystem
 🖱️ 클릭 투과로 바탕화면 상호작용 가능
 📌 Windows Hook으로 창 활성화 즉시 차단
 ⚡ CUDA 우선, CPU 자동 폴백으로 최고 성능
-✅ 고정 설정 (FPS: 60, 신뢰도: 0.35)";
+🎯 체크박스와 신뢰도 설정을 통한 정밀 제어";
             
             var infoLabel = new Label
             {
@@ -222,6 +224,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 Size = new System.Drawing.Size(460, 240)
             };
             
+            // 사용 가능한 대상들 - MosaicProcessor의 classNames와 일치시킴
             var availableTargets = new[]
             {
                 "얼굴", "가슴", "겨드랑이", "보지", "발", "몸 전체",
@@ -229,7 +232,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 "가슴_옷", "보지_옷", "여성"
             };
             
-            var defaultTargets = Config.Get<List<string>>("mosaic", "default_targets", new List<string>());
+            var defaultTargets = Config.Get<List<string>>("mosaic", "default_targets", new List<string> { "얼굴" });
             
             // 개선된 체크박스 레이아웃 (3열)
             for (int i = 0; i < availableTargets.Length; i++)
@@ -251,15 +254,16 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 targetsGroup.Controls.Add(checkbox);
             }
             parent.Controls.Add(targetsGroup);
-            y += 250; // 확장된 높이
+            y += 250;
             
             var settingsGroup = new GroupBox
             {
                 Text = "⚙️ 모자이크 설정",
                 Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 80)
+                Size = new System.Drawing.Size(460, 120) // 높이 증가
             };
             
+            // 모자이크 강도 설정
             var strengthTextLabel = new Label
             {
                 Text = "모자이크 강도:",
@@ -288,19 +292,48 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             };
             settingsGroup.Controls.Add(strengthLabel);
             
-            // 고정 설정 안내 라벨
+            // 신뢰도 설정 추가
+            var confidenceTextLabel = new Label
+            {
+                Text = "감지 신뢰도:",
+                Location = new System.Drawing.Point(10, 65),
+                AutoSize = true
+            };
+            settingsGroup.Controls.Add(confidenceTextLabel);
+            
+            confidenceSlider = new TrackBar
+            {
+                Minimum = 10, // 0.1
+                Maximum = 90, // 0.9
+                Value = 20,   // 0.2 (기본값)
+                TickFrequency = 10,
+                Location = new System.Drawing.Point(120, 60),
+                Size = new System.Drawing.Size(280, 45)
+            };
+            confidenceSlider.ValueChanged += UpdateConfidenceLabel;
+            settingsGroup.Controls.Add(confidenceSlider);
+            
+            confidenceLabel = new Label
+            {
+                Text = "0.2",
+                Location = new System.Drawing.Point(410, 65),
+                AutoSize = true
+            };
+            settingsGroup.Controls.Add(confidenceLabel);
+            
+            // 고정 설정 안내 라벨 (수정됨)
             var fixedSettingsLabel = new Label
             {
-                Text = $"🔧 고정 설정: FPS={FIXED_FPS}, 신뢰도={FIXED_CONFIDENCE}",
+                Text = $"🔧 고정 설정: FPS={FIXED_FPS} (신뢰도는 위에서 조절)",
                 ForeColor = Color.Blue,
                 Font = new Font("Arial", 9, FontStyle.Bold),
-                Location = new System.Drawing.Point(10, 55),
+                Location = new System.Drawing.Point(10, 95),
                 AutoSize = true
             };
             settingsGroup.Controls.Add(fixedSettingsLabel);
             
             parent.Controls.Add(settingsGroup);
-            y += 90;
+            y += 130;
             
             var controlPanel = new Panel
             {
@@ -458,6 +491,13 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             strengthLabel.Text = strengthSlider.Value.ToString();
         }
 
+        // 신뢰도 라벨 업데이트 메서드 추가
+        private void UpdateConfidenceLabel(object sender, EventArgs e)
+        {
+            currentConfidence = confidenceSlider.Value / 100.0f; // 0.1 ~ 0.9
+            confidenceLabel.Text = currentConfidence.ToString("F1");
+        }
+
         private void LogMessage(string message)
         {
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
@@ -567,9 +607,16 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             if (result != DialogResult.Yes)
                 return;
             
+            // 🔧 중요: 선택된 타겟들을 정확히 설정
             processor.SetTargets(selectedTargets);
             processor.SetStrength(strengthSlider.Value);
-            processor.ConfThreshold = FIXED_CONFIDENCE;
+            processor.ConfThreshold = currentConfidence; // UI에서 설정한 신뢰도 사용
+            
+            // 🔧 디버깅: 실제로 설정된 값들 확인
+            LogMessage($"🔧 프로세서에 설정된 타겟: [{string.Join(", ", processor.Targets)}]");
+            LogMessage($"🔧 프로세서 신뢰도: {processor.ConfThreshold}");
+            LogMessage($"🔧 프로세서 강도: {processor.Strength}");
+            LogMessage($"🔧 사용 가능한 클래스: [{string.Join(", ", processor.GetAvailableClasses())}]");
             
             LogMessage($"🔍 현재 작업 디렉토리: {Environment.CurrentDirectory}");
             LogMessage($"🔍 실행 파일 디렉토리: {AppDomain.CurrentDomain.BaseDirectory}");
@@ -617,7 +664,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             processThread.Start();
             
             LogMessage($"🚀 화면 검열 시작! 대상: {string.Join(", ", selectedTargets)}");
-            LogMessage($"⚙️ 설정: 강도={strengthSlider.Value}, 신뢰도={FIXED_CONFIDENCE}, FPS={FIXED_FPS}");
+            LogMessage($"⚙️ 설정: 강도={strengthSlider.Value}, 신뢰도={currentConfidence}, FPS={FIXED_FPS}");
             
             ThreadPool.QueueUserWorkItem(_ =>
             {
@@ -673,8 +720,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             LogMessage("✅ 화면 검열 중지됨");
         }
 
-        // MainForm.cs의 ProcessingLoop 메서드에서 수정할 부분
-
         private void ProcessingLoop()
         {
             LogMessage("🔄 CUDA 자동감지 + SortTracker 고성능 처리 루프 시작");
@@ -722,29 +767,36 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         processedFrame = originalFrame.Clone();
                     }
                     
-                    // SortTracker가 포함된 감지 수행
+                    // 객체 감지 (이제 선택된 타겟만 감지됨)
                     var detections = processor.DetectObjects(originalFrame);
                     
                     if (detections != null && detections.Count > 0)
                     {
-                        // 개선된 타겟 매칭 (부분 문자열 포함)
-                        var targetDetections = detections.Where(d => 
-                            processor.Targets.Contains(d.ClassName) || 
-                            processor.Targets.Any(target => d.ClassName.Contains(target) || target.Contains(d.ClassName))
-                        ).ToList();
+                        // 🔧 모든 감지된 항목에 모자이크 적용 (이미 필터링됨)
+                        var detectedClasses = detections.Select(d => d.ClassName).Distinct().ToList();
                         
-                        // 로깅 최적화 - 중요한 정보만 출력
-                        if (targetDetections.Count > 0)
+                        // 🔧 디버깅용 상세 로깅
+                        if (detections.Count > 0)
                         {
-                            LogMessage($"🎯 모자이크 대상 감지: {targetDetections.Count}개 (트래킹 ID: {string.Join(",", targetDetections.Select(d => d.TrackId))})");
+                            // 감지된 클래스별 개수 상세 출력
+                            var classCount = detections.GroupBy(d => d.ClassName)
+                                .ToDictionary(g => g.Key, g => g.Count());
+                            
+                            var classDetails = string.Join(", ", classCount.Select(kvp => $"{kvp.Key}:{kvp.Value}개"));
+                            
+                            LogMessage($"🎯 감지된 타겟: {classDetails} | 총 {detections.Count}개 객체 (트래킹 ID: {string.Join(",", detections.Select(d => d.TrackId))})");
+                            
+                            // 신뢰도도 함께 출력
+                            var confidenceDetails = string.Join(", ", detections.Select(d => $"{d.ClassName}({d.Confidence:F2})"));
+                            LogMessage($"🔍 신뢰도: {confidenceDetails}");
                             
                             // 캐싱 최적화된 모자이크 적용
-                            foreach (var detection in targetDetections)
+                            foreach (var detection in detections)
                             {
                                 processor.ApplySingleMosaicOptimized(processedFrame, detection);
                             }
                             
-                            stats["mosaic_applied"] = (int)stats["mosaic_applied"] + targetDetections.Count;
+                            stats["mosaic_applied"] = (int)stats["mosaic_applied"] + detections.Count;
                         }
                         
                         stats["objects_detected"] = (int)stats["objects_detected"] + detections.Count;
@@ -849,8 +901,6 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 }
             }
         }
-
-        // 기존의 ApplySingleMosaic 메서드는 제거하고, processor.ApplySingleMosaicOptimized를 사용합니다.
 
         public void Run()
         {

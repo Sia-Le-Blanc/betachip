@@ -7,6 +7,15 @@ using OpenCvSharp;
 
 namespace MosaicCensorSystem.Detection
 {
+
+    public class DetectionResult
+    {
+        public string ClassName { get; set; } = "";
+        public float Confidence { get; set; }
+        public int[] BBox { get; set; } = new int[4]; // [x1, y1, x2, y2]
+        public int ClassId { get; set; }
+    }
+
     /// <summary>
     /// 객체 감지 결과를 나타내는 클래스 (트래킹 ID 추가)
     /// </summary>
@@ -78,6 +87,7 @@ namespace MosaicCensorSystem.Detection
     /// </summary>
     public class MosaicProcessor : IProcessor, IDisposable
     {
+        private List<string> targetClassNames = new();
         private readonly Dictionary<string, object> config;
         private InferenceSession? model;
         private readonly string modelPath;
@@ -129,8 +139,8 @@ namespace MosaicCensorSystem.Detection
             // CUDA 우선, CPU 자동 폴백 모델 로드
             LoadModelWithAutoFallback();
 
-            // 설정값들 초기화
-            ConfThreshold = 0.35f;
+            // 설정값들 초기화 - 기본 신뢰도를 0.2로 설정
+            ConfThreshold = 0.2f; // 0.35f에서 0.2f로 변경
             Targets = new List<string> { "얼굴" };
             Strength = 15;
 
@@ -323,6 +333,11 @@ namespace MosaicCensorSystem.Detection
             }
         }
 
+        public void SetTargetClasses(List<string> selectedEnglishNames)
+        {
+            targetClassNames = selectedEnglishNames ?? new();
+        }
+
         public void SetTargets(List<string> targets)
         {
             Targets = targets ?? new List<string>();
@@ -362,7 +377,7 @@ namespace MosaicCensorSystem.Detection
                 if (output == null)
                     return new List<Detection>();
 
-                // 후처리
+                // 후처리 - 타겟 필터링 포함
                 var rawDetections = PostprocessOutput(output, frame.Width, frame.Height);
 
                 // SortTracker 적용
@@ -664,6 +679,29 @@ namespace MosaicCensorSystem.Detection
                     if (maxClassProb > ConfThreshold && maxClassIndex < classNames.Count)
                     {
                         string className = classNames[maxClassIndex];
+                        
+                        // 🔧 디버깅: 감지된 모든 클래스 로그 (필터링 전)
+                        if (frameCounter % 30 == 0) // 30프레임마다 한 번씩만 출력
+                        {
+                            Console.WriteLine($"🔍 감지된 클래스: {className} (신뢰도: {maxClassProb:F2}, 선택된 타겟: [{string.Join(", ", Targets)}])");
+                        }
+                        
+                        // 🔧 중요: 선택된 타겟만 필터링 (UI에서 체크된 항목만)
+                        if (!Targets.Contains(className))
+                        {
+                            // 🔧 디버깅: 필터링된 클래스 로그
+                            if (frameCounter % 30 == 0)
+                            {
+                                Console.WriteLine($"❌ 필터링됨: {className} (선택된 타겟에 없음)");
+                            }
+                            continue; // 선택되지 않은 타겟은 건너뛰기
+                        }
+                        
+                        // 🔧 디버깅: 통과된 클래스 로그
+                        if (frameCounter % 30 == 0)
+                        {
+                            Console.WriteLine($"✅ 통과됨: {className} (선택된 타겟에 포함)");
+                        }
 
                         // 좌표 변환
                         float scaleX = originalWidth / 640.0f;
@@ -775,16 +813,16 @@ namespace MosaicCensorSystem.Detection
 
             foreach (var detection in detections)
             {
-                if (Targets.Contains(detection.ClassName))
-                {
-                    // 최적화된 모자이크 적용 사용
-                    ApplySingleMosaicOptimized(processedFrame, detection);
-                }
+                // 여기서 다시 체크할 필요가 없음 - 이미 필터링됨
+                ApplySingleMosaicOptimized(processedFrame, detection);
             }
 
             return (processedFrame, detections);
         }
 
+        /// <summary>
+        /// 기본 모자이크 적용 메서드 (단일 이미지용)
+        /// </summary>
         public Mat ApplyMosaic(Mat image, int? strength = null)
         {
             int mosaicStrength = strength ?? Strength;
@@ -807,6 +845,66 @@ namespace MosaicCensorSystem.Detection
                 Cv2.Resize(small, mosaic, new OpenCvSharp.Size(w, h), interpolation: InterpolationFlags.Nearest);
 
                 return mosaic;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"⚠️ 모자이크 적용 오류: {e.Message}");
+                return image.Clone();
+            }
+        }
+
+        /// <summary>
+        /// DetectionResult를 사용하는 오버로드 메서드 (기존 코드와의 호환성)
+        /// </summary>
+        public Mat ApplyMosaic(Mat image, List<DetectionResult> detections, List<string> selectedTargets, int? strength = null)
+        {
+            int mosaicStrength = strength ?? Strength;
+
+            if (image == null || image.Empty())
+                return image?.Clone() ?? new Mat();
+
+            try
+            {
+                Mat result = image.Clone();
+
+                foreach (var detection in detections)
+                {
+                    string className = detection.ClassName;
+
+                    // 선택된 타겟 필터링
+                    if (!selectedTargets.Contains(className))
+                        continue;
+
+                    var bbox = detection.BBox;
+                    int x1 = Math.Max(0, bbox[0]);
+                    int y1 = Math.Max(0, bbox[1]);
+                    int x2 = Math.Min(image.Width, bbox[2]);
+                    int y2 = Math.Min(image.Height, bbox[3]);
+
+                    int w = x2 - x1;
+                    int h = y2 - y1;
+
+                    if (w <= 0 || h <= 0) continue;
+
+                    Rect roi = new Rect(x1, y1, w, h);
+                    Mat region = new Mat(result, roi);
+
+                    int smallW = Math.Max(1, w / mosaicStrength);
+                    int smallH = Math.Max(1, h / mosaicStrength);
+
+                    using var small = new Mat();
+                    Cv2.Resize(region, small, new OpenCvSharp.Size(smallW, smallH), interpolation: InterpolationFlags.Linear);
+
+                    Mat mosaicRegion = new Mat();
+                    Cv2.Resize(small, mosaicRegion, new OpenCvSharp.Size(w, h), interpolation: InterpolationFlags.Nearest);
+
+                    mosaicRegion.CopyTo(new Mat(result, roi));
+                    
+                    // 메모리 정리
+                    mosaicRegion.Dispose();
+                }
+
+                return result;
             }
             catch (Exception e)
             {
@@ -846,9 +944,9 @@ namespace MosaicCensorSystem.Detection
                         AvgDetectionTime = 0,
                         Fps = 0,
                         LastDetectionsCount = 0,
-                        CacheHits = 0,
-                        CacheMisses = 0,
-                        TrackedObjects = 0
+                        CacheHits = cacheHits,
+                        CacheMisses = cacheMisses,
+                        TrackedObjects = trackedObjects.Count
                     };
                 }
 
