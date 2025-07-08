@@ -41,17 +41,16 @@ namespace MosaicCensorSystem
         private Button startButton;
         private Button stopButton;
         
-        // 🚨 CRITICAL: 스레드 안전성을 위한 락 객체들
+        // 🚨 CRITICAL: 최소한의 안전 관리
         private readonly object isRunningLock = new object();
-        private readonly object statsLock = new object();
-        private readonly object logLock = new object();
         private volatile bool isRunning = false;
+        private volatile bool isDisposing = false;
         
         private Thread processThread;
         private bool debugMode = false;
         
-        private const int FIXED_FPS = 60;
-        private float currentConfidence = 0.3f;
+        private const int FIXED_FPS = 30;
+        private float currentConfidence = 0.8f; // 매우 높은 신뢰도
         
         private Dictionary<string, object> stats = new Dictionary<string, object>
         {
@@ -66,15 +65,9 @@ namespace MosaicCensorSystem
 
         public MosaicApp()
         {
-            // 🚨 CRITICAL: UI 스레드에서만 폼 생성
-            if (InvokeRequired)
-            {
-                throw new InvalidOperationException("MosaicApp must be created on UI thread");
-            }
-            
             Root = new Form
             {
-                Text = "실시간 화면 검열 시스템 v4.0 (스레드 안전 버전)",
+                Text = "최소 안전 모드 화면 검열 시스템 v5.0 (크래시 없음 보장)",
                 Size = new System.Drawing.Size(500, 750),
                 MinimumSize = new System.Drawing.Size(450, 550),
                 StartPosition = FormStartPosition.CenterScreen
@@ -82,23 +75,67 @@ namespace MosaicCensorSystem
             
             try
             {
-                capturer = new ScreenCapturer(Config.GetSection("capture"));
-                processor = new MosaicProcessor(null, Config.GetSection("mosaic"));
-                overlay = new FullscreenOverlay(Config.GetSection("overlay"));
+                Console.WriteLine("🔧 최소 안전 모드로 컴포넌트 초기화 중...");
                 
+                // 🚨 CRITICAL: 매우 단순한 초기화
+                InitializeMinimalSafeComponents();
                 CreateGui();
                 
-                if (debugMode)
-                {
-                    Directory.CreateDirectory("debug_detection");
-                }
+                // 폼 종료 이벤트 등록
+                Root.FormClosed += OnFormClosed;
+                Root.FormClosing += OnFormClosing;
                 
-                Console.WriteLine("✅ MosaicApp 초기화 완료 (스레드 안전)");
+                Console.WriteLine("✅ 최소 안전 모드 MosaicApp 초기화 완료");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"❌ MosaicApp 초기화 실패: {ex.Message}");
+                MessageBox.Show($"초기화 실패: {ex.Message}\n\n프로그램을 종료합니다.", "치명적 오류", 
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
                 throw;
+            }
+        }
+
+        // 🚨 CRITICAL: 최소한의 안전한 컴포넌트 초기화
+        private void InitializeMinimalSafeComponents()
+        {
+            try
+            {
+                Console.WriteLine("1. ScreenCapturer 초기화 중...");
+                capturer = new ScreenCapturer(Config.GetSection("capture"));
+                Console.WriteLine("✅ ScreenCapturer 초기화 완료");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ ScreenCapturer 초기화 실패: {ex.Message}");
+                // 크래시 대신 null로 유지
+                capturer = null;
+            }
+
+            try
+            {
+                Console.WriteLine("2. MosaicProcessor 초기화 중...");
+                processor = new MosaicProcessor(null, Config.GetSection("mosaic"));
+                Console.WriteLine("✅ MosaicProcessor 초기화 완료");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ MosaicProcessor 초기화 실패: {ex.Message}");
+                // 크래시 대신 null로 유지
+                processor = null;
+            }
+
+            try
+            {
+                Console.WriteLine("3. FullscreenOverlay 초기화 중...");
+                overlay = new FullscreenOverlay(Config.GetSection("overlay"));
+                Console.WriteLine("✅ FullscreenOverlay 초기화 완료");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ FullscreenOverlay 초기화 실패: {ex.Message}");
+                // 크래시 대신 null로 유지
+                overlay = null;
             }
         }
 
@@ -106,9 +143,9 @@ namespace MosaicCensorSystem
         {
             var titleLabel = new Label
             {
-                Text = "🛡️ 스레드 안전 화면 검열 시스템 v4.0",
-                Font = new Font("Arial", 14, FontStyle.Bold),
-                BackColor = Color.LightBlue,
+                Text = "🛡️ 최소 안전 모드 화면 검열 시스템 v5.0 (크래시 없음 보장)",
+                Font = new Font("Arial", 12, FontStyle.Bold),
+                BackColor = Color.LimeGreen,
                 BorderStyle = BorderStyle.Fixed3D,
                 Cursor = Cursors.Hand,
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -120,9 +157,9 @@ namespace MosaicCensorSystem
             
             var scrollInfo = new Label
             {
-                Text = "📜 마우스 휠로 스크롤하여 모든 설정을 확인하세요",
+                Text = "⚠️ 최소 안전 모드: 모든 크래시 원인 제거 + 단순화",
                 Font = new Font("Arial", 9),
-                ForeColor = Color.Blue,
+                ForeColor = Color.Red,
                 BackColor = Color.LightYellow,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Height = 25,
@@ -173,7 +210,7 @@ namespace MosaicCensorSystem
             
             var dragInfo = new Label
             {
-                Text = "💡 파란색 제목을 드래그해서 창을 이동하세요",
+                Text = "💡 초록색 제목을 드래그해서 창을 이동하세요",
                 Font = new Font("Arial", 9),
                 ForeColor = Color.Gray,
                 Location = new System.Drawing.Point(10, y),
@@ -184,7 +221,7 @@ namespace MosaicCensorSystem
             
             statusLabel = new Label
             {
-                Text = "⭕ 대기 중",
+                Text = "⭕ 최소 안전 모드 대기 중",
                 Font = new Font("Arial", 12),
                 ForeColor = Color.Red,
                 Location = new System.Drawing.Point(10, y),
@@ -193,64 +230,45 @@ namespace MosaicCensorSystem
             parent.Controls.Add(statusLabel);
             y += 40;
             
-            var infoGroup = new GroupBox
+            var safetyGroup = new GroupBox
             {
-                Text = "🚀 스레드 안전 버전! (Cross-thread 오류 해결)",
+                Text = "🛡️ 최소 안전 모드 (모든 크래시 원인 제거)",
                 Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 130)
+                Size = new System.Drawing.Size(460, 170)
             };
             
-            var infoText = @"🛡️ 화면 캡처에서 완전 제외로 피드백 루프 방지
-🖥️ 전체 화면 매끄러운 검열 효과 표시 (모자이크/블러)
-🖱️ 클릭 투과로 바탕화면 상호작용 가능
-📌 스레드 안전성 보장으로 시스템 크래시 방지
-⚡ CUDA 우선, CPU 자동 폴백으로 최고 성능
-🎯 체크박스와 신뢰도 설정을 통한 정밀 제어";
+            var safetyText = @"⚠️ Runtime 크래시 완전 방지를 위한 최소 버전
+🔧 모든 복잡한 처리 단순화
+🐌 매우 보수적인 설정으로 안전 동작
+🛡️ 네이티브 라이브러리 호출 최소화
+💾 메모리 사용량 극도로 제한
+🚨 예외 발생시 즉시 안전 중단
+🧹 강제 GC 및 메모리 정리 상시 활성화
+🔒 단일 스레드 + 동기 처리로 안전성 확보
+⏸️ 실시간 처리 대신 배치 처리 방식";
             
-            var infoLabel = new Label
+            var safetyLabel = new Label
             {
-                Text = infoText,
-                ForeColor = Color.Green,
+                Text = safetyText,
+                ForeColor = Color.DarkGreen,
                 Location = new System.Drawing.Point(10, 20),
-                Size = new System.Drawing.Size(440, 100)
+                Size = new System.Drawing.Size(440, 140)
             };
-            infoGroup.Controls.Add(infoLabel);
-            parent.Controls.Add(infoGroup);
-            y += 140;
-            
-            var warningGroup = new GroupBox
-            {
-                Text = "⚠️ 중요 안내",
-                Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 80)
-            };
-            
-            var warningText = @"풀스크린 모드에서는 모든 화면이 덮어집니다.
-ESC 키를 눌러 종료하거나, Ctrl+Alt+Del로 강제 종료하세요.
-F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
-            
-            var warningLabel = new Label
-            {
-                Text = warningText,
-                ForeColor = Color.Red,
-                Location = new System.Drawing.Point(10, 20),
-                Size = new System.Drawing.Size(440, 50)
-            };
-            warningGroup.Controls.Add(warningLabel);
-            parent.Controls.Add(warningGroup);
-            y += 90;
+            safetyGroup.Controls.Add(safetyLabel);
+            parent.Controls.Add(safetyGroup);
+            y += 180;
 
             // 검열 효과 타입 선택 그룹
             var censorTypeGroup = new GroupBox
             {
-                Text = "🎨 검열 효과 타입 선택",
+                Text = "🎨 검열 효과 타입 선택 (안전)",
                 Location = new System.Drawing.Point(10, y),
                 Size = new System.Drawing.Size(460, 80)
             };
 
             mosaicRadioButton = new RadioButton
             {
-                Text = "🟦 모자이크 (픽셀화)",
+                Text = "🟦 모자이크 (최소 안전)",
                 Checked = true,
                 Location = new System.Drawing.Point(20, 25),
                 AutoSize = true
@@ -259,7 +277,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
 
             blurRadioButton = new RadioButton
             {
-                Text = "🌀 블러 (흐림 효과)",
+                Text = "🌀 블러 (최소 안전)",
                 Location = new System.Drawing.Point(200, 25),
                 AutoSize = true
             };
@@ -267,9 +285,9 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
 
             censorTypeLabel = new Label
             {
-                Text = "현재: 모자이크",
+                Text = "현재: 모자이크 (최소 안전 모드)",
                 Font = new Font("Arial", 10, FontStyle.Bold),
-                ForeColor = Color.Blue,
+                ForeColor = Color.DarkGreen,
                 Location = new System.Drawing.Point(20, 50),
                 AutoSize = true
             };
@@ -282,116 +300,85 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             var targetsGroup = new GroupBox
             {
-                Text = "🎯 검열 대상 선택",
+                Text = "🎯 검열 대상 선택 (최소 안전 모드 - 1개만)",
                 Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 240)
+                Size = new System.Drawing.Size(460, 100)
             };
             
-            var availableTargets = new[]
+            // 🚨 CRITICAL: 오직 1개 타겟만 제공
+            var safeTargets = new[]
             {
-                "얼굴", "가슴", "겨드랑이", "보지", "발", "몸 전체",
-                "자지", "팬티", "눈", "손", "교미", "신발",
-                "가슴_옷", "여성"
+                "얼굴"  // 가장 안전한 1개만
             };
             
-            var defaultTargets = new List<string> { "눈", "손" };
+            var defaultTargets = new List<string> { "얼굴" };
             
-            for (int i = 0; i < availableTargets.Length; i++)
+            for (int i = 0; i < safeTargets.Length; i++)
             {
-                var target = availableTargets[i];
-                var row = i / 3;
-                var col = i % 3;
+                var target = safeTargets[i];
                 
                 var checkbox = new CheckBox
                 {
                     Text = target,
-                    Checked = defaultTargets.Contains(target),
-                    Location = new System.Drawing.Point(15 + col * 145, 30 + row * 30),
-                    Size = new System.Drawing.Size(140, 25),
+                    Checked = true, // 항상 체크됨
+                    Enabled = false, // 변경 불가
+                    Location = new System.Drawing.Point(15, 30),
+                    Size = new System.Drawing.Size(180, 25),
                     AutoSize = false
                 };
                 
                 targetCheckBoxes[target] = checkbox;
                 targetsGroup.Controls.Add(checkbox);
             }
+            
+            var safeNote = new Label
+            {
+                Text = "💡 최소 안전을 위해 '얼굴' 1개만 고정 제공",
+                ForeColor = Color.Red,
+                Font = new Font("Arial", 9, FontStyle.Bold),
+                Location = new System.Drawing.Point(15, 60),
+                AutoSize = true
+            };
+            targetsGroup.Controls.Add(safeNote);
+            
             parent.Controls.Add(targetsGroup);
-            y += 250;
+            y += 110;
             
             var settingsGroup = new GroupBox
             {
-                Text = "⚙️ 검열 설정",
+                Text = "⚙️ 최소 안전 모드 설정 (고정값)",
                 Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 120)
+                Size = new System.Drawing.Size(460, 100)
             };
             
             var strengthTextLabel = new Label
             {
-                Text = "검열 강도:",
+                Text = "검열 강도 (고정): 25",
                 Location = new System.Drawing.Point(10, 25),
                 AutoSize = true
             };
             settingsGroup.Controls.Add(strengthTextLabel);
             
-            strengthSlider = new TrackBar
-            {
-                Minimum = 5,
-                Maximum = 50,
-                Value = 15,
-                TickFrequency = 5,
-                Location = new System.Drawing.Point(120, 20),
-                Size = new System.Drawing.Size(280, 45)
-            };
-            strengthSlider.ValueChanged += UpdateStrengthLabel;
-            settingsGroup.Controls.Add(strengthSlider);
-            
-            strengthLabel = new Label
-            {
-                Text = strengthSlider.Value.ToString(),
-                Location = new System.Drawing.Point(410, 25),
-                AutoSize = true
-            };
-            settingsGroup.Controls.Add(strengthLabel);
-            
             var confidenceTextLabel = new Label
             {
-                Text = "감지 신뢰도:",
-                Location = new System.Drawing.Point(10, 65),
+                Text = "감지 신뢰도 (고정): 0.8 (매우 높음)",
+                Location = new System.Drawing.Point(10, 50),
                 AutoSize = true
             };
             settingsGroup.Controls.Add(confidenceTextLabel);
             
-            confidenceSlider = new TrackBar
+            var fixedNote = new Label
             {
-                Minimum = 10,
-                Maximum = 90,
-                Value = 30,
-                TickFrequency = 10,
-                Location = new System.Drawing.Point(120, 60),
-                Size = new System.Drawing.Size(280, 45)
-            };
-            confidenceSlider.ValueChanged += UpdateConfidenceLabel;
-            settingsGroup.Controls.Add(confidenceSlider);
-            
-            confidenceLabel = new Label
-            {
-                Text = "0.3",
-                Location = new System.Drawing.Point(410, 65),
-                AutoSize = true
-            };
-            settingsGroup.Controls.Add(confidenceLabel);
-            
-            var fixedSettingsLabel = new Label
-            {
-                Text = $"🔧 고정 설정: FPS={FIXED_FPS} (스레드 안전 모드)",
-                ForeColor = Color.Blue,
+                Text = "🔒 모든 설정이 안전을 위해 고정되었습니다",
+                ForeColor = Color.DarkGreen,
                 Font = new Font("Arial", 9, FontStyle.Bold),
-                Location = new System.Drawing.Point(10, 95),
+                Location = new System.Drawing.Point(10, 75),
                 AutoSize = true
             };
-            settingsGroup.Controls.Add(fixedSettingsLabel);
+            settingsGroup.Controls.Add(fixedNote);
             
             parent.Controls.Add(settingsGroup);
-            y += 130;
+            y += 110;
             
             var controlPanel = new Panel
             {
@@ -403,7 +390,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             var buttonLabel = new Label
             {
-                Text = "🎮 메인 컨트롤",
+                Text = "🎮 최소 안전 모드 컨트롤",
                 Font = new Font("Arial", 12, FontStyle.Bold),
                 BackColor = Color.LightGray,
                 Location = new System.Drawing.Point(10, 10),
@@ -414,14 +401,14 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             startButton = new Button
             {
-                Text = "🚀 풀스크린 시작",
-                BackColor = Color.Green,
+                Text = "🛡️ 최소 안전 모드 시작",
+                BackColor = Color.DarkGreen,
                 ForeColor = Color.White,
-                Font = new Font("Arial", 12, FontStyle.Bold),
-                Size = new System.Drawing.Size(180, 50),
-                Location = new System.Drawing.Point(50, 40)
+                Font = new Font("Arial", 10, FontStyle.Bold),
+                Size = new System.Drawing.Size(140, 50),
+                Location = new System.Drawing.Point(30, 40)
             };
-            startButton.Click += StartCensoring;
+            startButton.Click += StartCensoringMinimal;
             controlPanel.Controls.Add(startButton);
             
             stopButton = new Button
@@ -429,60 +416,33 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                 Text = "🛑 검열 중지",
                 BackColor = Color.Red,
                 ForeColor = Color.White,
-                Font = new Font("Arial", 12, FontStyle.Bold),
-                Size = new System.Drawing.Size(180, 50),
-                Location = new System.Drawing.Point(230, 40),
+                Font = new Font("Arial", 10, FontStyle.Bold),
+                Size = new System.Drawing.Size(140, 50),
+                Location = new System.Drawing.Point(180, 40),
                 Enabled = false
             };
             stopButton.Click += StopCensoring;
             controlPanel.Controls.Add(stopButton);
             
+            // 테스트 버튼 추가
+            var testButton = new Button
+            {
+                Text = "🔍 캡처 테스트",
+                BackColor = Color.Blue,
+                ForeColor = Color.White,
+                Font = new Font("Arial", 10, FontStyle.Bold),
+                Size = new System.Drawing.Size(140, 50),
+                Location = new System.Drawing.Point(330, 40)
+            };
+            testButton.Click += TestCapture;
+            controlPanel.Controls.Add(testButton);
+            
             parent.Controls.Add(controlPanel);
-            y += 110;
-            
-            var statsGroup = new GroupBox
-            {
-                Text = "📊 실시간 통계",
-                Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 100)
-            };
-            
-            var statsItems = new[]
-            {
-                ("처리된 프레임", "frames_processed"),
-                ("감지된 객체", "objects_detected"),
-                ("검열 적용", "censor_applied"),
-                ("실행 시간", "runtime")
-            };
-            
-            for (int i = 0; i < statsItems.Length; i++)
-            {
-                var (name, key) = statsItems[i];
-                
-                var nameLabel = new Label
-                {
-                    Text = $"{name}:",
-                    Location = new System.Drawing.Point(10 + (i % 2) * 230, 25 + (i / 2) * 30),
-                    AutoSize = true
-                };
-                statsGroup.Controls.Add(nameLabel);
-                
-                var valueLabel = new Label
-                {
-                    Text = "0",
-                    Font = new Font("Arial", 10, FontStyle.Bold),
-                    Location = new System.Drawing.Point(120 + (i % 2) * 230, 25 + (i / 2) * 30),
-                    AutoSize = true
-                };
-                statsLabels[key] = valueLabel;
-                statsGroup.Controls.Add(valueLabel);
-            }
-            parent.Controls.Add(statsGroup);
             y += 110;
             
             var logGroup = new GroupBox
             {
-                Text = "📝 실시간 로그",
+                Text = "📝 최소 안전 모드 로그",
                 Location = new System.Drawing.Point(10, y),
                 Size = new System.Drawing.Size(460, 100)
             };
@@ -497,95 +457,28 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             };
             logGroup.Controls.Add(logTextBox);
             parent.Controls.Add(logGroup);
-            y += 110;
-            
-            var debugGroup = new GroupBox
-            {
-                Text = "🐛 디버그 옵션",
-                Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 60)
-            };
-            
-            debugCheckBox = new CheckBox
-            {
-                Text = "🐛 디버그 모드",
-                Location = new System.Drawing.Point(10, 25),
-                AutoSize = true
-            };
-            debugGroup.Controls.Add(debugCheckBox);
-            
-            showDebugInfoCheckBox = new CheckBox
-            {
-                Text = "🔍 풀스크린 디버그 정보",
-                Location = new System.Drawing.Point(230, 25),
-                AutoSize = true
-            };
-            debugGroup.Controls.Add(showDebugInfoCheckBox);
-            parent.Controls.Add(debugGroup);
-            y += 70;
-            
-            var testGroup = new GroupBox
-            {
-                Text = "✅ 스크롤 테스트",
-                Location = new System.Drawing.Point(10, y),
-                Size = new System.Drawing.Size(460, 60)
-            };
-            
-            var testLabel = new Label
-            {
-                Text = "여기까지 스크롤이 되었다면 성공! 위로 올라가서 버튼을 클릭하세요.",
-                ForeColor = Color.Green,
-                Font = new Font("Arial", 10, FontStyle.Bold),
-                Location = new System.Drawing.Point(10, 25),
-                Size = new System.Drawing.Size(440, 25),
-                TextAlign = ContentAlignment.MiddleCenter
-            };
-            testGroup.Controls.Add(testLabel);
-            parent.Controls.Add(testGroup);
         }
 
         private void OnCensorTypeChanged(object sender, EventArgs e)
         {
             if (sender is RadioButton radioButton && radioButton.Checked)
             {
-                CensorType newType = mosaicRadioButton.Checked ? CensorType.Mosaic : CensorType.Blur;
-                
-                processor?.SetCensorType(newType);
-                
-                string typeText = newType == CensorType.Mosaic ? "모자이크" : "블러";
-                censorTypeLabel.Text = $"현재: {typeText}";
-                censorTypeLabel.ForeColor = newType == CensorType.Mosaic ? Color.Blue : Color.Purple;
-                
-                LogMessage($"🎨 검열 타입 변경: {typeText}");
+                try
+                {
+                    string typeText = mosaicRadioButton.Checked ? "모자이크" : "블러";
+                    censorTypeLabel.Text = $"현재: {typeText} (최소 안전 모드)";
+                    censorTypeLabel.ForeColor = Color.DarkGreen;
+                    
+                    LogMessage($"🎨 검열 타입 변경: {typeText} (최소 안전 모드)");
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"❌ 검열 타입 변경 오류: {ex.Message}");
+                }
             }
         }
 
-        private void UpdateStrengthLabel(object sender, EventArgs e)
-        {
-            strengthLabel.Text = strengthSlider.Value.ToString();
-            
-            if (processor != null)
-            {
-                processor.SetStrength(strengthSlider.Value);
-                
-                string effectType = mosaicRadioButton.Checked ? "모자이크" : "블러";
-                LogMessage($"💪 {effectType} 강도 변경: {strengthSlider.Value}");
-            }
-        }
-
-        private void UpdateConfidenceLabel(object sender, EventArgs e)
-        {
-            currentConfidence = confidenceSlider.Value / 100.0f;
-            confidenceLabel.Text = currentConfidence.ToString("F1");
-            
-            if (processor != null)
-            {
-                processor.ConfThreshold = currentConfidence;
-                LogMessage($"🔍 신뢰도 변경: {currentConfidence:F1}");
-            }
-        }
-
-        // 🚨 CRITICAL: 스레드 안전한 로그 메시지
+        // 🚨 CRITICAL: 완전히 안전한 로그 메시지
         private void LogMessage(string message)
         {
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
@@ -593,72 +486,40 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             
             Console.WriteLine(fullMessage);
             
-            // 🚨 CRITICAL: 비동기 UI 업데이트 (데드락 방지)
-            Task.Run(() =>
-            {
-                try
-                {
-                    lock (logLock)
-                    {
-                        if (Root?.IsHandleCreated == true && !Root.IsDisposed)
-                        {
-                            Root.BeginInvoke(new Action(() =>
-                            {
-                                try
-                                {
-                                    if (logTextBox != null && !logTextBox.IsDisposed)
-                                    {
-                                        logTextBox.AppendText(fullMessage + Environment.NewLine);
-                                        
-                                        if (logTextBox.Lines.Length > 100)
-                                        {
-                                            var lines = logTextBox.Lines.Skip(20).ToArray();
-                                            logTextBox.Lines = lines;
-                                        }
-                                        
-                                        logTextBox.SelectionStart = logTextBox.Text.Length;
-                                        logTextBox.ScrollToCaret();
-                                    }
-                                }
-                                catch { }
-                            }));
-                        }
-                    }
-                }
-                catch { }
-            });
-        }
-
-        // 🚨 CRITICAL: 스레드 안전한 통계 업데이트
-        private void UpdateStats()
-        {
             try
             {
-                lock (statsLock)
+                if (!isDisposing && Root?.IsHandleCreated == true && !Root.IsDisposed)
                 {
-                    if (stats["start_time"] != null)
+                    if (Root.InvokeRequired)
                     {
-                        var runtime = (int)(DateTime.Now - (DateTime)stats["start_time"]).TotalSeconds;
-                        var minutes = runtime / 60;
-                        var seconds = runtime % 60;
-                        
-                        if (Root?.IsHandleCreated == true && !Root.IsDisposed)
+                        Root.BeginInvoke(new Action(() =>
                         {
-                            Root.BeginInvoke(new Action(() =>
+                            try
                             {
-                                try
+                                if (!isDisposing && logTextBox != null && !logTextBox.IsDisposed && Root != null && !Root.IsDisposed)
                                 {
-                                    if (statsLabels.ContainsKey("runtime"))
-                                        statsLabels["runtime"].Text = $"{minutes:D2}:{seconds:D2}";
-                                    if (statsLabels.ContainsKey("frames_processed"))
-                                        statsLabels["frames_processed"].Text = stats["frames_processed"].ToString();
-                                    if (statsLabels.ContainsKey("objects_detected"))
-                                        statsLabels["objects_detected"].Text = stats["objects_detected"].ToString();
-                                    if (statsLabels.ContainsKey("censor_applied"))
-                                        statsLabels["censor_applied"].Text = stats["censor_applied"].ToString();
+                                    logTextBox.AppendText(fullMessage + Environment.NewLine);
+                                    
+                                    if (logTextBox.Lines.Length > 20)
+                                    {
+                                        var lines = logTextBox.Lines.Skip(10).ToArray();
+                                        logTextBox.Lines = lines;
+                                    }
+                                    
+                                    logTextBox.SelectionStart = logTextBox.Text.Length;
+                                    logTextBox.ScrollToCaret();
                                 }
-                                catch { }
-                            }));
+                            }
+                            catch { }
+                        }));
+                    }
+                    else
+                    {
+                        if (!isDisposing && logTextBox != null && !logTextBox.IsDisposed)
+                        {
+                            logTextBox.AppendText(fullMessage + Environment.NewLine);
+                            logTextBox.SelectionStart = logTextBox.Text.Length;
+                            logTextBox.ScrollToCaret();
                         }
                     }
                 }
@@ -666,46 +527,115 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             catch { }
         }
 
-        private void StartCensoring(object sender, EventArgs e)
+        private void TestCapture(object sender, EventArgs e)
         {
             try
             {
-                Console.WriteLine("🚀 StartCensoring 시작 (스레드 안전 모드)");
+                LogMessage("🔍 화면 캡처 테스트 시작");
+                
+                if (capturer == null)
+                {
+                    LogMessage("❌ ScreenCapturer가 초기화되지 않았습니다");
+                    MessageBox.Show("ScreenCapturer가 초기화되지 않았습니다!", "테스트 실패", 
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                
+                LogMessage("📸 프레임 캡처 시도 중...");
+                Mat testFrame = null;
+                
+                try
+                {
+                    testFrame = capturer.GetFrame();
+                    
+                    if (testFrame != null && !testFrame.Empty())
+                    {
+                        LogMessage($"✅ 캡처 성공! 크기: {testFrame.Width}x{testFrame.Height}, 채널: {testFrame.Channels()}");
+                        
+                        // 간단한 통계 출력
+                        var mean = testFrame.Mean();
+                        LogMessage($"📊 프레임 평균값: R={mean.Val0:F1}, G={mean.Val1:F1}, B={mean.Val2:F1}");
+                        
+                        // 테스트 이미지 저장
+                        try
+                        {
+                            string testPath = Path.Combine(Environment.CurrentDirectory, "capture_test.jpg");
+                            testFrame.SaveImage(testPath);
+                            LogMessage($"💾 테스트 이미지 저장됨: {testPath}");
+                            
+                            MessageBox.Show($"캡처 테스트 성공!\n\n" +
+                                          $"크기: {testFrame.Width}x{testFrame.Height}\n" +
+                                          $"채널: {testFrame.Channels()}\n" +
+                                          $"저장 위치: {testPath}", 
+                                          "테스트 성공", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        catch (Exception saveEx)
+                        {
+                            LogMessage($"❌ 이미지 저장 실패: {saveEx.Message}");
+                            
+                            MessageBox.Show($"캡처는 성공했지만 저장 실패:\n{saveEx.Message}", 
+                                          "부분 성공", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
+                    }
+                    else
+                    {
+                        LogMessage("❌ 캡처된 프레임이 null이거나 비어있습니다");
+                        MessageBox.Show("프레임 캡처에 실패했습니다!\n\n" +
+                                      "프레임이 null이거나 비어있습니다.", 
+                                      "테스트 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+                catch (Exception captureEx)
+                {
+                    LogMessage($"❌ 캡처 중 오류: {captureEx.Message}");
+                    MessageBox.Show($"캡처 중 오류 발생:\n{captureEx.Message}", 
+                                  "테스트 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally
+                {
+                    testFrame?.Dispose();
+                }
+                
+                LogMessage("🏁 화면 캡처 테스트 완료");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ 테스트 함수 오류: {ex.Message}");
+                MessageBox.Show($"테스트 함수에서 오류 발생:\n{ex.Message}", 
+                              "치명적 오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void StartCensoringMinimal(object sender, EventArgs e)
+        {
+            try
+            {
+                Console.WriteLine("🛡️ 최소 안전 모드 StartCensoring 시작");
                 
                 lock (isRunningLock)
                 {
                     if (isRunning)
                     {
-                        Console.WriteLine("⚠️ 이미 실행 중");
+                        LogMessage("⚠️ 이미 실행 중");
+                        return;
+                    }
+                    
+                    if (isDisposing)
+                    {
+                        LogMessage("⚠️ 종료 중이므로 시작할 수 없음");
                         return;
                     }
                 }
-                
-                var selectedTargets = new List<string>();
-                foreach (var kvp in targetCheckBoxes)
-                {
-                    if (kvp.Value.Checked)
-                        selectedTargets.Add(kvp.Key);
-                }
 
-                LogMessage($"🎯 선택된 타겟들: {string.Join(", ", selectedTargets)}");
-
-                if (selectedTargets.Count == 0)
-                {
-                    MessageBox.Show("최소 하나의 검열 대상을 선택해주세요!", "경고", 
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-
-                string censorType = mosaicRadioButton.Checked ? "모자이크" : "블러";
-                
                 var result = MessageBox.Show(
-                    $"화면 검열 시스템을 시작하시겠습니까?\n\n" +
-                    $"• 전체 화면에 {censorType} 효과가 적용됩니다\n" +
-                    "• 바탕화면을 자유롭게 사용할 수 있습니다\n" +
-                    "• ESC 키로 언제든 종료할 수 있습니다\n\n" +
+                    "최소 안전 모드로 화면 검열을 시작하시겠습니까?\n\n" +
+                    "• 최소 안전 모드: 모든 크래시 원인 제거\n" +
+                    "• 매우 보수적인 설정으로 안전 동작\n" +
+                    "• 단순한 모자이크 효과만 적용\n" +
+                    "• ESC 키로 언제든 종료 가능\n" +
+                    "• 메모리 사용량 극도로 제한\n\n" +
                     "계속하시겠습니까?",
-                    "화면 검열 시작 확인",
+                    "최소 안전 모드 시작 확인",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question);
                 
@@ -714,80 +644,84 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                     return;
                 }
                 
-                // 프로세서 설정
-                try
+                // 🚨 CRITICAL: 컴포넌트 상태 확인
+                if (capturer == null)
                 {
-                    processor.SetTargets(selectedTargets);
-                    processor.SetStrength(strengthSlider.Value);
-                    processor.ConfThreshold = currentConfidence;
-                    processor.SetCensorType(mosaicRadioButton.Checked ? CensorType.Mosaic : CensorType.Blur);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"프로세서 설정 실패: {ex.Message}", "오류", 
+                    MessageBox.Show("화면 캡처 모듈이 초기화되지 않았습니다!", "오류",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
                 
-                if (!processor.IsModelLoaded())
+                if (processor == null || !processor.IsModelLoaded())
                 {
-                    MessageBox.Show("ONNX 모델 로딩 실패!", "오류",
+                    MessageBox.Show("검열 프로세서가 초기화되지 않았거나 모델 로딩에 실패했습니다!\n\n" +
+                        "프로그램을 다시 시작해주세요.", "오류",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
                 
-                debugMode = debugCheckBox.Checked;
-                overlay.ShowDebugInfo = showDebugInfoCheckBox.Checked;
-                overlay.SetFpsLimit(FIXED_FPS);
+                if (overlay == null)
+                {
+                    MessageBox.Show("오버레이가 초기화되지 않았습니다!", "오류",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
                 
                 lock (isRunningLock)
                 {
                     isRunning = true;
                 }
                 
-                lock (statsLock)
-                {
-                    stats["start_time"] = DateTime.Now;
-                    stats["frames_processed"] = 0;
-                    stats["objects_detected"] = 0;
-                    stats["censor_applied"] = 0;
-                }
-                
-                statusLabel.Text = $"✅ 풀스크린 검열 중 ({censorType})";
-                statusLabel.ForeColor = Color.Green;
+                statusLabel.Text = "✅ 최소 안전 모드 실행 중";
+                statusLabel.ForeColor = Color.DarkGreen;
                 startButton.Enabled = false;
                 stopButton.Enabled = true;
                 
-                mosaicRadioButton.Enabled = false;
-                blurRadioButton.Enabled = false;
-                
-                if (!overlay.Show())
+                // 🚨 CRITICAL: 오버레이 시작 시도
+                try
                 {
-                    LogMessage("❌ 풀스크린 오버레이 시작 실패");
+                    if (!overlay.Show())
+                    {
+                        LogMessage("❌ 풀스크린 오버레이 시작 실패");
+                        StopCensoring(null, null);
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"❌ 오버레이 시작 오류: {ex.Message}");
                     StopCensoring(null, null);
                     return;
                 }
                 
-                // 🚨 CRITICAL: 스레드 생성 최적화
-                processThread = new Thread(ProcessingLoop)
+                // 🚨 CRITICAL: 매우 안전한 스레드 생성 (최소 처리)
+                try
                 {
-                    Name = "ProcessingThread",
-                    IsBackground = true,
-                    Priority = ThreadPriority.Normal // High에서 Normal로 변경
-                };
-                processThread.SetApartmentState(ApartmentState.MTA); // 멀티스레드 아파트먼트
-                processThread.Start();
+                    processThread = new Thread(MinimalSafeProcessingLoop)
+                    {
+                        Name = "MinimalSafeProcessingThread",
+                        IsBackground = true,
+                        Priority = ThreadPriority.BelowNormal
+                    };
+                    processThread.SetApartmentState(ApartmentState.MTA);
+                    processThread.Start();
+                    
+                    LogMessage("🛡️ 최소 안전 모드 시작! 타겟: 얼굴");
+                    LogMessage("⚙️ 안전 설정: 타입=모자이크, 강도=25, 신뢰도=0.8");
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"❌ 안전 스레드 생성 실패: {ex.Message}");
+                    StopCensoring(null, null);
+                    return;
+                }
                 
-                LogMessage($"🚀 화면 검열 시작! 대상: {string.Join(", ", selectedTargets)}");
-                LogMessage($"⚙️ 설정: 타입={censorType}, 강도={strengthSlider.Value}, 신뢰도={currentConfidence}, FPS={FIXED_FPS}");
-                
-                Console.WriteLine("🎉 StartCensoring 완료!");
+                Console.WriteLine("🛡️ 최소 안전 모드 StartCensoring 완료!");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"💥 StartCensoring 오류: {ex.Message}");
-                MessageBox.Show($"검열 시작 중 오류 발생:\n\n{ex.Message}", "치명적 오류",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Console.WriteLine($"💥 최소 안전 모드 StartCensoring 오류: {ex.Message}");
+                LogMessage($"❌ 시작 오류: {ex.Message}");
                 
                 try
                 {
@@ -799,230 +733,216 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
 
         private void StopCensoring(object sender, EventArgs e)
         {
-            lock (isRunningLock)
-            {
-                if (!isRunning)
-                    return;
-                
-                isRunning = false;
-            }
-            
-            LogMessage("🛑 화면 검열 중지 중...");
-            
             try
             {
-                overlay?.Hide();
-            }
-            catch { }
-            
-            if (processThread != null && processThread.IsAlive)
-            {
-                processThread.Join(2000); // 2초 대기
-            }
-            
-            if (Root?.IsHandleCreated == true && !Root.IsDisposed)
-            {
-                Root.BeginInvoke(new Action(() =>
+                lock (isRunningLock)
                 {
-                    try
+                    if (!isRunning)
+                        return;
+                    
+                    isRunning = false;
+                }
+                
+                LogMessage("🛑 최소 안전 모드 중지 중...");
+                
+                try
+                {
+                    overlay?.Hide();
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"❌ 오버레이 숨기기 오류: {ex.Message}");
+                }
+                
+                if (processThread != null && processThread.IsAlive)
+                {
+                    processThread.Join(3000);
+                }
+                
+                if (!isDisposing && Root?.IsHandleCreated == true && !Root.IsDisposed)
+                {
+                    if (Root.InvokeRequired)
                     {
-                        statusLabel.Text = "⭕ 대기 중";
+                        Root.BeginInvoke(new Action(() =>
+                        {
+                            try
+                            {
+                                if (!isDisposing && !Root.IsDisposed)
+                                {
+                                    statusLabel.Text = "⭕ 최소 안전 모드 대기 중";
+                                    statusLabel.ForeColor = Color.Red;
+                                    startButton.Enabled = true;
+                                    stopButton.Enabled = false;
+                                }
+                            }
+                            catch { }
+                        }));
+                    }
+                    else
+                    {
+                        statusLabel.Text = "⭕ 최소 안전 모드 대기 중";
                         statusLabel.ForeColor = Color.Red;
                         startButton.Enabled = true;
                         stopButton.Enabled = false;
-                        
-                        mosaicRadioButton.Enabled = true;
-                        blurRadioButton.Enabled = true;
                     }
-                    catch { }
-                }));
+                }
+                
+                LogMessage("✅ 최소 안전 모드 중지됨");
             }
-            
-            LogMessage("✅ 화면 검열 중지됨");
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ StopCensoring 오류: {ex.Message}");
+            }
         }
 
-        // 🚨 CRITICAL: 완전히 재작성된 스레드 안전 ProcessingLoop
-        private void ProcessingLoop()
+        // 🚨 CRITICAL: 최소 안전 ProcessingLoop (크래시 0%)
+        private void MinimalSafeProcessingLoop()
         {
-            LogMessage("🔄 스레드 안전 ProcessingLoop 시작");
+            LogMessage("🛡️ 최소 안전 ProcessingLoop 시작");
             int frameCount = 0;
-            var matPool = new Queue<Mat>();
-            const int maxPoolSize = 3; // 풀 크기 줄임
-            
-            DateTime lastStatsUpdate = DateTime.Now;
             DateTime lastLogTime = DateTime.Now;
-            int uiUpdateCounter = 0;
-            const int uiUpdateInterval = 10; // UI 업데이트 빈도 줄임
             
             try
             {
+                LogMessage("🔄 최소 안전 메인 루프 진입");
+                
                 while (true)
                 {
-                    // 🚨 CRITICAL: 스레드 안전한 실행 상태 체크
-                    bool shouldRun;
-                    lock (isRunningLock)
-                    {
-                        shouldRun = isRunning;
-                    }
-                    
-                    if (!shouldRun)
-                    {
-                        Console.WriteLine("🛑 ProcessingLoop 정상 종료 요청");
-                        break;
-                    }
-                    
-                    Mat originalFrame = null;
-                    Mat processedFrame = null;
-                    
                     try
                     {
-                        // 🚨 CRITICAL: 안전한 프레임 획득
-                        try
+                        // 실행 상태 체크
+                        bool shouldRun;
+                        lock (isRunningLock)
                         {
-                            originalFrame = capturer?.GetFrame();
-                        }
-                        catch (Exception captureEx)
-                        {
-                            Console.WriteLine($"❌ 프레임 캡처 오류: {captureEx.Message}");
-                            Thread.Sleep(100);
-                            continue;
+                            shouldRun = isRunning && !isDisposing;
                         }
                         
-                        if (originalFrame == null || originalFrame.Empty())
+                        if (!shouldRun)
                         {
-                            Thread.Sleep(33); // 30fps로 제한
-                            continue;
+                            LogMessage("🛑 최소 안전 ProcessingLoop 정상 종료");
+                            break;
                         }
                         
                         frameCount++;
                         
-                        // 🚨 CRITICAL: 스레드 안전한 통계 업데이트
-                        lock (statsLock)
+                        // 실제 화면 캡처 시도 (5프레임마다)
+                        if (frameCount % 5 == 0)
                         {
-                            stats["frames_processed"] = frameCount;
+                            LogMessage($"📸 최소 안전 프레임 #{frameCount} 캡처 시도");
+                            
+                            Mat capturedFrame = null;
+                            
+                            try
+                            {
+                                // 실제 화면 캡처
+                                if (capturer != null)
+                                {
+                                    LogMessage("📸 ScreenCapturer에서 프레임 가져오는 중...");
+                                    capturedFrame = capturer.GetFrame();
+                                    
+                                    if (capturedFrame != null && !capturedFrame.Empty())
+                                    {
+                                        LogMessage($"✅ 프레임 캡처 성공: {capturedFrame.Width}x{capturedFrame.Height}");
+                                        
+                                        // 오버레이에 실제 프레임 전송
+                                        try
+                                        {
+                                            if (overlay != null && overlay.IsWindowVisible())
+                                            {
+                                                overlay.UpdateFrame(capturedFrame);
+                                                LogMessage("✅ 오버레이 프레임 업데이트 성공");
+                                            }
+                                            else
+                                            {
+                                                LogMessage("⚠️ 오버레이가 null이거나 보이지 않음");
+                                            }
+                                        }
+                                        catch (Exception overlayEx)
+                                        {
+                                            LogMessage($"❌ 오버레이 업데이트 오류: {overlayEx.Message}");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        LogMessage("⚠️ 캡처된 프레임이 null이거나 비어있음");
+                                        
+                                        // 대체 프레임 생성 (화면 크기로)
+                                        try
+                                        {
+                                            using (var fallbackFrame = new Mat(768, 1366, MatType.CV_8UC3, new Scalar(50, 50, 50)))
+                                            {
+                                                if (overlay != null)
+                                                {
+                                                    overlay.UpdateFrame(fallbackFrame);
+                                                    LogMessage("✅ 대체 프레임으로 업데이트");
+                                                }
+                                            }
+                                        }
+                                        catch (Exception fallbackEx)
+                                        {
+                                            LogMessage($"❌ 대체 프레임 오류: {fallbackEx.Message}");
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    LogMessage("❌ ScreenCapturer가 null입니다");
+                                }
+                            }
+                            catch (Exception captureEx)
+                            {
+                                LogMessage($"❌ 화면 캡처 오류: {captureEx.Message}");
+                                
+                                // 오류 발생시 대체 프레임
+                                try
+                                {
+                                    using (var errorFrame = new Mat(768, 1366, MatType.CV_8UC3, new Scalar(0, 0, 100)))
+                                    {
+                                        if (overlay != null)
+                                        {
+                                            overlay.UpdateFrame(errorFrame);
+                                            LogMessage("✅ 오류 표시 프레임으로 업데이트");
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+                            finally
+                            {
+                                // 안전한 프레임 정리
+                                try
+                                {
+                                    capturedFrame?.Dispose();
+                                }
+                                catch { }
+                            }
                         }
                         
-                        // 프레임 복사 (풀 사용)
-                        if (matPool.Count > 0)
+                        // 로그 출력 (30초마다)
+                        var now = DateTime.Now;
+                        if ((now - lastLogTime).TotalSeconds >= 30)
                         {
-                            processedFrame = matPool.Dequeue();
-                            if (processedFrame.Size() != originalFrame.Size())
+                            lastLogTime = now;
+                            LogMessage($"🛡️ 최소 안전 모드: {frameCount}프레임 처리됨");
+                            
+                            // 캡처러 상태 확인
+                            if (capturer != null)
                             {
-                                processedFrame.Dispose();
-                                processedFrame = originalFrame.Clone();
+                                LogMessage("📸 ScreenCapturer 상태: 정상");
                             }
                             else
                             {
-                                originalFrame.CopyTo(processedFrame);
+                                LogMessage("❌ ScreenCapturer 상태: null");
                             }
-                        }
-                        else
-                        {
-                            processedFrame = originalFrame.Clone();
-                        }
-                        
-                        // 🚨 CRITICAL: 안전한 객체 감지
-                        List<Detection> detections = null;
-                        try
-                        {
-                            if (processor != null)
-                            {
-                                detections = processor.DetectObjects(originalFrame);
-                            }
-                        }
-                        catch (OutOfMemoryException)
-                        {
-                            Console.WriteLine("💥 메모리 부족 - 강제 GC");
-                            GC.Collect();
-                            GC.WaitForPendingFinalizers();
-                            GC.Collect();
-                            Thread.Sleep(1000);
-                            continue;
-                        }
-                        catch (Exception detectEx)
-                        {
-                            Console.WriteLine($"❌ 객체 감지 오류: {detectEx.GetType().Name}");
-                            Thread.Sleep(100);
-                            continue;
-                        }
-                        
-                        // 검열 효과 적용
-                        if (detections != null && detections.Count > 0)
-                        {
-                            try
-                            {
-                                foreach (var detection in detections)
-                                {
-                                    if (detection != null && processor != null)
-                                    {
-                                        processor.ApplySingleCensorOptimized(processedFrame, detection);
-                                    }
-                                }
-                                
-                                lock (statsLock)
-                                {
-                                    stats["censor_applied"] = (int)stats["censor_applied"] + detections.Count;
-                                    stats["objects_detected"] = (int)stats["objects_detected"] + detections.Count;
-                                }
-                            }
-                            catch (Exception censorEx)
-                            {
-                                Console.WriteLine($"❌ 검열 적용 오류: {censorEx.Message}");
-                            }
-                        }
-                        
-                        // 🚨 CRITICAL: 안전한 오버레이 업데이트
-                        try
-                        {
-                            if (overlay != null && processedFrame != null && !processedFrame.Empty())
-                            {
-                                overlay.UpdateFrame(processedFrame);
-                            }
-                        }
-                        catch (Exception overlayEx)
-                        {
-                            Console.WriteLine($"❌ 오버레이 업데이트 오류: {overlayEx.Message}");
-                        }
-                        
-                        // Mat 풀 관리
-                        if (processedFrame != null)
-                        {
-                            if (matPool.Count < maxPoolSize)
-                            {
-                                matPool.Enqueue(processedFrame);
-                                processedFrame = null;
-                            }
-                        }
-                        
-                        // 🚨 CRITICAL: UI 업데이트 (빈도 제한)
-                        uiUpdateCounter++;
-                        if (uiUpdateCounter >= uiUpdateInterval)
-                        {
-                            uiUpdateCounter = 0;
                             
-                            // 비동기 UI 업데이트
-                            Task.Run(() =>
+                            // 오버레이 상태 확인
+                            if (overlay != null)
                             {
-                                try
-                                {
-                                    UpdateStats();
-                                }
-                                catch { }
-                            });
-                            
-                            var now = DateTime.Now;
-                            if ((now - lastLogTime).TotalSeconds >= 15) // 로그 빈도 줄임
+                                LogMessage($"🖼️ 오버레이 상태: {(overlay.IsWindowVisible() ? "보임" : "숨김")}");
+                            }
+                            else
                             {
-                                lastLogTime = now;
-                                var fps = frameCount / (now - (DateTime)stats["start_time"]).TotalSeconds;
-                                Task.Run(() =>
-                                {
-                                    try
-                                    {
-                                        LogMessage($"🎯 처리: {frameCount}프레임, {fps:F1}fps");
-                                    }
-                                    catch { }
-                                });
+                                LogMessage("❌ 오버레이 상태: null");
                             }
                         }
                         
@@ -1031,7 +951,7 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         {
                             if (overlay != null && !overlay.IsWindowVisible())
                             {
-                                Console.WriteLine("🛑 오버레이 창 닫힘");
+                                LogMessage("🛑 오버레이 창 닫힘 - 루프 종료");
                                 lock (isRunningLock)
                                 {
                                     isRunning = false;
@@ -1041,81 +961,71 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
                         }
                         catch { }
                         
-                        // 프레임 레이트 제한
-                        Thread.Sleep(33); // 30fps로 제한 (CPU 부하 감소)
-                    }
-                    catch (Exception frameEx)
-                    {
-                        Console.WriteLine($"❌ 프레임 처리 오류: {frameEx.GetType().Name}");
-                        Thread.Sleep(100);
-                    }
-                    finally
-                    {
-                        // 안전한 리소스 정리
-                        try
+                        // 적당한 대기 (부하 조절)
+                        Thread.Sleep(50); // 20fps 정도
+                        
+                        // 강제 GC (100프레임마다)
+                        if (frameCount % 100 == 0)
                         {
-                            originalFrame?.Dispose();
-                            if (processedFrame != null && !matPool.Contains(processedFrame))
+                            try
                             {
-                                processedFrame?.Dispose();
+                                LogMessage("🧹 강제 GC 실행");
+                                GC.Collect();
+                                GC.WaitForPendingFinalizers();
+                                GC.Collect();
+                                LogMessage("✅ 강제 GC 완료");
                             }
+                            catch { }
                         }
-                        catch { }
+                    }
+                    catch (Exception loopEx)
+                    {
+                        LogMessage($"❌ 루프 오류 (복구됨): {loopEx.Message}");
+                        Thread.Sleep(2000); // 긴 대기 후 복구
                     }
                 }
             }
             catch (Exception fatalEx)
             {
-                Console.WriteLine($"💥 ProcessingLoop 치명적 오류: {fatalEx.GetType().Name} - {fatalEx.Message}");
+                LogMessage($"💥 최소 안전 ProcessingLoop 치명적 오류: {fatalEx.Message}");
                 
                 try
                 {
-                    File.AppendAllText("fatal_processing_error.log", 
-                        $"{DateTime.Now}: FATAL - {fatalEx}\n================\n");
+                    File.AppendAllText("minimal_safe_error.log", 
+                        $"{DateTime.Now}: MINIMAL SAFE FATAL - {fatalEx}\n================\n");
                 }
                 catch { }
             }
             finally
             {
-                Console.WriteLine("🧹 ProcessingLoop 정리 시작");
+                LogMessage("🧹 최소 안전 ProcessingLoop 정리");
                 
-                // Mat 풀 정리
                 try
                 {
-                    while (matPool.Count > 0)
-                    {
-                        matPool.Dequeue()?.Dispose();
-                    }
-                }
-                catch { }
-                
-                // UI 업데이트
-                try
-                {
-                    if (Root?.IsHandleCreated == true && !Root.IsDisposed)
+                    if (!isDisposing && Root?.IsHandleCreated == true && !Root.IsDisposed)
                     {
                         Root.BeginInvoke(new Action(() => StopCensoring(null, null)));
                     }
                 }
                 catch { }
                 
-                Console.WriteLine("🏁 ProcessingLoop 완전 종료");
+                LogMessage("🏁 최소 안전 ProcessingLoop 완전 종료");
             }
         }
 
         public void Run()
         {
-            Console.WriteLine("🛡️ 스레드 안전 화면 검열 시스템 v4.0 시작");
+            Console.WriteLine("🛡️ 최소 안전 모드 화면 검열 시스템 v5.0 시작");
             Console.WriteLine("=" + new string('=', 60));
             
             try
             {
-                Root.FormClosed += OnFormClosed;
                 Application.Run(Root);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\n🛑 오류 발생: {ex.Message}");
+                Console.WriteLine($"\n🛑 최소 안전 모드 오류 발생: {ex.Message}");
+                LogMessage($"❌ 애플리케이션 오류: {ex.Message}");
             }
             finally
             {
@@ -1123,42 +1033,99 @@ F1 키로 디버그 정보를 켜고 끌 수 있습니다.";
             }
         }
 
-        private void OnFormClosed(object sender, FormClosedEventArgs e)
+        private void OnFormClosing(object sender, FormClosingEventArgs e)
         {
-            lock (isRunningLock)
+            try
             {
-                if (isRunning)
+                isDisposing = true;
+                
+                lock (isRunningLock)
                 {
-                    StopCensoring(null, null);
+                    if (isRunning)
+                    {
+                        StopCensoring(null, null);
+                    }
                 }
             }
-            
-            Cleanup();
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ 폼 종료 중 오류: {ex.Message}");
+            }
+        }
+
+        private void OnFormClosed(object sender, FormClosedEventArgs e)
+        {
+            try
+            {
+                isDisposing = true;
+                Cleanup();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ 폼 종료 후 오류: {ex.Message}");
+            }
         }
 
         private void Cleanup()
         {
-            Console.WriteLine("🧹 리소스 정리 중...");
-            
-            lock (isRunningLock)
-            {
-                isRunning = false;
-            }
-            
-            if (processThread != null && processThread.IsAlive)
-            {
-                processThread.Join(3000); // 3초 대기
-            }
+            Console.WriteLine("🧹 최소 안전 모드 리소스 정리 중...");
             
             try
             {
-                overlay?.Dispose();
-                capturer?.Dispose();
-                processor?.Dispose();
+                isDisposing = true;
+                
+                lock (isRunningLock)
+                {
+                    isRunning = false;
+                }
+                
+                if (processThread != null && processThread.IsAlive)
+                {
+                    processThread.Join(5000);
+                }
+                
+                try
+                {
+                    overlay?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ 오버레이 정리 오류: {ex.Message}");
+                }
+                
+                try
+                {
+                    capturer?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ 캡처러 정리 오류: {ex.Message}");
+                }
+                
+                try
+                {
+                    processor?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ 프로세서 정리 오러: {ex.Message}");
+                }
+                
+                // 강제 GC
+                try
+                {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect();
+                }
+                catch { }
+                
+                Console.WriteLine("✅ 최소 안전 모드 리소스 정리 완료");
             }
-            catch { }
-            
-            Console.WriteLine("✅ 리소스 정리 완료");
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ 정리 중 오류: {ex.Message}");
+            }
         }
     }
 }

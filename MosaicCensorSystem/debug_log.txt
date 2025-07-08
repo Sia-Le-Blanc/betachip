@@ -1,5 +1,5 @@
 ============================================================
-🚀 프로그램 시작 - 2025-07-08 21:56:08
+🚀 프로그램 시작 - 2025-07-09 00:17:38
 📄 로그 파일: C:\Users\Sia\OneDrive\바탕 화면\MosaicCensorSystem\MosaicCensorSystem\debug_log.txt
 ============================================================
 📍 현재 작업 디렉토리: C:\Users\Sia\OneDrive\바탕 화면\MosaicCensorSystem\MosaicCensorSystem
@@ -8,15 +8,19 @@
 📂 ONNX 모델 경로: C:\Users\Sia\OneDrive\바탕 화면\MosaicCensorSystem\MosaicCensorSystem\bin\Release\net6.0-windows\win-x64\Resources/best.onnx
 📂 파일 존재 여부: True
 🚀 초고속 반응성 모드로 프로그램 시작
-✅ 최고 우선순위 설정 완료 - 즉시 반응 모드
+✅ 적절한 우선순위 설정 완료 - 안정성 우선 모드
 ✅ 메모리 최적화 완료
 📡 ONNX 모델 로딩 시도
 ✅ 모델 로딩 성공
 🪟 초고속 GUI 루프 진입 준비됨
 ✅ Windows Forms 초기화 완료
 🚀 MosaicApp 인스턴스 생성 중...
+🔧 안전 모드로 컴포넌트 초기화 중...
+1. ScreenCapturer 초기화 중...
 ✅ 화면 해상도: 1366x768, 캡처 크기: 1366x768
 ✅ 캡처 스레드 시작됨
+✅ ScreenCapturer 초기화 완료
+2. MosaicProcessor 초기화 중...
 🔍 CUDA 자동감지 + 모자이크/블러 검열 프로세서 초기화
 🤖 YOLO 모델 로딩 시작: Resources/best.onnx
 🎯 CUDA GPU 가속 시도 중...
@@ -32,45 +36,21 @@
 ⚙️ 기본 설정: 강도=15, 신뢰도=0.3, 타입=Mosaic
 🚀 가속 모드: Optimized CPU
 📊 SortTracker 활성화 - 검열 효과 캐싱으로 성능 향상
+✅ MosaicProcessor 초기화 완료
+3. FullscreenOverlay 초기화 중...
 🛡️ 화면 검열 시스템 초기화 완료
+✅ FullscreenOverlay 초기화 완료
+✅ 안전 모드 MosaicApp 초기화 완료
 ✅ MosaicApp 인스턴스 생성 완료
 🏃 Application.Run 시작...
-🚀 StartCensoring 시작
-📋 선택된 타겟 수집 중...
-[21:56:25] 🎯 선택된 타겟들: 얼굴, 가슴, 보지, 팬티, 교미, 가슴_옷
-🎨 검열 타입 확인 중...
-선택된 검열 타입: 모자이크
-💬 사용자 확인 대화상자 표시 중...
-⚙️ 프로세서 설정 적용 중...
-1️⃣ 타겟 설정 중...
-🎯 타겟 변경: 얼굴, 가슴, 보지, 팬티, 교미, 가슴_옷
-2️⃣ 강도 설정 중...
-💪 강도 변경: 15
-3️⃣ 신뢰도 설정 중...
-4️⃣ 검열 타입 설정 중...
+🛡️ 안전 모드 StartCensoring 시작
+[00:17:48] 🎯 안전 모드 선택된 타겟들: 얼굴
+🎯 타겟 변경: 얼굴
+💪 강도 변경: 20
 🎨 검열 타입 변경: Mosaic
-✅ 프로세서 설정 완료
-🔍 설정 값 검증 중...
-[21:56:26] 🔧 프로세서에 설정된 타겟: [얼굴, 가슴, 보지, 팬티, 교미, 가슴_옷]
-[21:56:26] 🔧 프로세서 신뢰도: 0.3
-[21:56:26] 🔧 프로세서 강도: 15
-[21:56:26] 🔧 프로세서 검열 타입: Mosaic
-[21:56:26] 🔧 사용 가능한 클래스: [얼굴, 가슴, 겨드랑이, 보지, 발, 몸 전체, 자지, 팬티, 눈, 손, 교미, 신발, 가슴_옷, 여성]
-📂 모델 파일 확인 중...
-[21:56:26] 🔍 현재 작업 디렉토리: C:\Users\Sia\OneDrive\바탕 화면\MosaicCensorSystem\MosaicCensorSystem
-[21:56:26] 🔍 실행 파일 디렉토리: C:\Users\Sia\OneDrive\바탕 화면\MosaicCensorSystem\MosaicCensorSystem\bin\Release\net6.0-windows\win-x64\
-[21:56:26] 🔍 예상 모델 경로: C:\Users\Sia\OneDrive\바탕 화면\MosaicCensorSystem\MosaicCensorSystem\bin\Release\net6.0-windows\win-x64\Resources/best.onnx
-[21:56:26] 🔍 파일 존재 여부: True
-🤖 모델 로드 상태 확인 중...
-[21:56:26] ✅ ONNX 모델 로드 확인됨!
-🐛 디버그 모드 설정 중...
-🖥️ 오버레이 설정 중...
-🎮 FPS 제한: 60
-🏃 실행 상태 설정 중...
-🎨 UI 업데이트 중...
-🖼️ 풀스크린 오버레이 시작 중...
+🎮 FPS 제한: 30
 🛡️ 풀스크린 캡처 방지 + 클릭 투과 오버레이 표시 시작...
-🔍 윈도우 핸들 획득: 4065546
+🔍 윈도우 핸들 획득: 134158
 🛡️ 캡처 방지 설정 성공! (100% 피드백 루프 방지)
 🔍 현재 Extended Style: 0x00010008
 🔍 새로운 Extended Style: 0x000900A8
@@ -82,13 +62,9 @@
 ✅ 풀스크린 캡처 방지 + 클릭 투과 오버레이 표시됨
 💡 ESC 키를 누르면 종료됩니다
 💡 바탕화면을 자유롭게 클릭/드래그할 수 있습니다
-✅ 풀스크린 오버레이 시작 성공
-🧵 처리 스레드 시작 중...
 🔄 강화된 최상단 유지 루프 시작
-✅ 처리 스레드 시작 성공
-[21:56:26] 🚀 화면 검열 시작! 대상: 얼굴, 가슴, 보지, 팬티, 교미, 가슴_옷
-[21:56:26] ⚙️ 설정: 타입=모자이크, 강도=15, 신뢰도=0.3, FPS=60
-🧪 추가 테스트 스레드 시작 중...
-🎉 StartCensoring 완료!
+[00:17:49] 🛡️ 안전 모드 시작! 타겟: 얼굴
+[00:17:49] ⚙️ 안전 설정: 타입=모자이크, 강도=20, 신뢰도=0.5, FPS=30
+🛡️ 안전 모드 StartCensoring 완료!
 🔄 풀스크린 디스플레이 루프 시작
-[21:56:26] 🔄 CUDA 자동감지 + SortTracker 고성능 처리 루프 시작
+[00:17:49] 🛡️ 안전 모드 ProcessingLoop 시작
