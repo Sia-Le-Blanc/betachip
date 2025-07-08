@@ -7,6 +7,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using OpenCvSharp;
 using OpenCvSharp.Extensions;
@@ -475,35 +476,100 @@ namespace MosaicCensorSystem.Overlay
         {
             Console.WriteLine("🔄 풀스크린 디스플레이 루프 시작");
 
+            int consecutiveErrors = 0;
+            const int maxConsecutiveErrors = 5;
+            DateTime lastRender = DateTime.Now;
+
             try
             {
-                while (isRunning)
+                while (isRunning && !cancellationTokenSource.Token.IsCancellationRequested)
                 {
                     try
                     {
+                        // 프레임 레이트 제한 (60fps)
+                        var elapsed = (DateTime.Now - lastRender).TotalMilliseconds;
+                        if (elapsed < 16.67) // 1000/60 ≈ 16.67ms
+                        {
+                            Thread.Sleep(1);
+                            continue;
+                        }
+                        lastRender = DateTime.Now;
+
+                        // UI 스레드에서 안전하게 업데이트
                         if (InvokeRequired)
                         {
-                            Invoke(new Action(() => Invalidate()));
+                            try
+                            {
+                                Invoke(new Action(() => 
+                                {
+                                    if (!IsDisposed && Visible)
+                                    {
+                                        Invalidate();
+                                    }
+                                }));
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                // 폼이 이미 해제됨
+                                break;
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                // 폼이 생성되지 않았거나 해제됨
+                                break;
+                            }
                         }
                         else
                         {
-                            Invalidate();
+                            if (!IsDisposed && Visible)
+                            {
+                                Invalidate();
+                            }
                         }
 
                         UpdateFps();
+                        consecutiveErrors = 0;
                         
-                        // 응답성 향상: 대기시간 단축
-                        Thread.Sleep(0);
+                        // CPU 사용률 감소를 위한 최소 대기
+                        Thread.Sleep(1);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // 정상적인 종료
+                        Console.WriteLine("🛑 오버레이 객체가 해제됨 - 디스플레이 루프 종료");
+                        break;
                     }
                     catch (Exception e)
                     {
-                        Console.WriteLine($"❌ 디스플레이 오류: {e.Message}");
+                        consecutiveErrors++;
+                        Console.WriteLine($"❌ 디스플레이 오류 #{consecutiveErrors}: {e.Message}");
+                        
+                        if (consecutiveErrors > maxConsecutiveErrors)
+                        {
+                            Console.WriteLine($"❌ 연속 {consecutiveErrors}회 오류 - 디스플레이 루프 종료");
+                            break;
+                        }
+                        
+                        Thread.Sleep(Math.Min(consecutiveErrors * 50, 500)); // 점진적 대기
                     }
                 }
             }
-            catch { }
-
-            Console.WriteLine("🛑 풀스크린 디스플레이 루프 종료");
+            catch (Exception fatalEx)
+            {
+                Console.WriteLine($"❌ 디스플레이 루프 치명적 오류: {fatalEx.Message}");
+                Console.WriteLine($"Stack Trace: {fatalEx.StackTrace}");
+            }
+            finally
+            {
+                Console.WriteLine("🛑 풀스크린 디스플레이 루프 종료");
+                
+                // 안전한 종료 처리
+                try
+                {
+                    isRunning = false;
+                }
+                catch { }
+            }
         }
 
         protected override void OnPaint(PaintEventArgs e)

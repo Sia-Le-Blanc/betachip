@@ -7,6 +7,14 @@ using OpenCvSharp;
 
 namespace MosaicCensorSystem.Detection
 {
+    /// <summary>
+    /// 검열 효과 타입 열거형
+    /// </summary>
+    public enum CensorType
+    {
+        Mosaic,  // 모자이크
+        Blur     // 블러
+    }
 
     public class DetectionResult
     {
@@ -30,7 +38,7 @@ namespace MosaicCensorSystem.Detection
     }
 
     /// <summary>
-    /// 트래킹된 객체 정보 (모자이크 캐싱용)
+    /// 트래킹된 객체 정보 (검열 효과 캐싱용)
     /// </summary>
     public class TrackedObject
     {
@@ -39,12 +47,14 @@ namespace MosaicCensorSystem.Detection
         public Rect2d BoundingBox { get; set; }
         public float LastConfidence { get; set; }
         public int StableFrameCount { get; set; } = 0;
-        public Mat? CachedMosaicRegion { get; set; }
+        public Mat? CachedCensorRegion { get; set; } // 모자이크/블러 캐싱
+        public CensorType LastCensorType { get; set; } = CensorType.Mosaic;
+        public int LastStrength { get; set; } = 15;
         public DateTime LastUpdated { get; set; } = DateTime.Now;
         
         public void Dispose()
         {
-            CachedMosaicRegion?.Dispose();
+            CachedCensorRegion?.Dispose();
         }
     }
 
@@ -62,16 +72,19 @@ namespace MosaicCensorSystem.Detection
     }
 
     /// <summary>
-    /// 모자이크 처리 인터페이스
+    /// 검열 처리 인터페이스
     /// </summary>
     public interface IProcessor
     {
         void SetTargets(List<string> targets);
         void SetStrength(int strength);
+        void SetCensorType(CensorType censorType);
         List<Detection> DetectObjects(Mat frame);
         (Mat processedFrame, List<Detection> detections) DetectObjectsDetailed(Mat frame);
+        Mat ApplyCensor(Mat image, int? strength = null);
         Mat ApplyMosaic(Mat image, int? strength = null);
-        Mat? CreateMosaicForRegion(Mat frame, int x1, int y1, int x2, int y2, int? strength = null);
+        Mat ApplyBlur(Mat image, int? strength = null);
+        Mat? CreateCensorForRegion(Mat frame, int x1, int y1, int x2, int y2, int? strength = null);
         PerformanceStats GetPerformanceStats();
         void UpdateConfig(Dictionary<string, object> kwargs);
         bool IsModelLoaded();
@@ -80,14 +93,14 @@ namespace MosaicCensorSystem.Detection
         float ConfThreshold { get; set; }
         List<string> Targets { get; }
         int Strength { get; }
+        CensorType CurrentCensorType { get; }
     }
 
     /// <summary>
-    /// CUDA 자동감지 및 최적화된 모자이크 프로세서 (SortTracker 추가)
+    /// CUDA 자동감지 및 최적화된 검열 프로세서 (SortTracker + 모자이크/블러 지원)
     /// </summary>
     public class MosaicProcessor : IProcessor, IDisposable
     {
-        private List<string> targetClassNames = new();
         private readonly Dictionary<string, object> config;
         private InferenceSession? model;
         private readonly string modelPath;
@@ -108,13 +121,14 @@ namespace MosaicCensorSystem.Detection
         public float ConfThreshold { get; set; }
         public List<string> Targets { get; private set; }
         public int Strength { get; private set; }
+        public CensorType CurrentCensorType { get; private set; }
 
-        // 클래스 이름 매핑 (YAML과 정확히 일치)
-        private readonly List<string> classNames = new List<string>
+        // 가이드의 클래스 이름 매핑 (정확히 14개 클래스)
+        private readonly Dictionary<int, string> classNames = new Dictionary<int, string>
         {
-            "얼굴", "가슴", "겨드랑이", "보지", "발", "몸 전체",
-            "자지", "팬티", "눈", "손", "교미", "신발",
-            "가슴_옷", "보지_옷", "여성"
+            {0, "얼굴"}, {1, "가슴"}, {2, "겨드랑이"}, {3, "보지"}, {4, "발"},
+            {5, "몸 전체"}, {6, "자지"}, {7, "팬티"}, {8, "눈"}, {9, "손"},
+            {10, "교미"}, {11, "신발"}, {12, "가슴_옷"}, {13, "여성"}
         };
 
         // 성능 통계
@@ -126,7 +140,7 @@ namespace MosaicCensorSystem.Detection
 
         public MosaicProcessor(string? modelPath = null, Dictionary<string, object>? config = null)
         {
-            Console.WriteLine("🔍 CUDA 자동감지 + SortTracker MosaicProcessor 초기화");
+            Console.WriteLine("🔍 CUDA 자동감지 + 모자이크/블러 검열 프로세서 초기화");
             this.config = config ?? new Dictionary<string, object>();
             
             // 모델 경로 설정
@@ -139,15 +153,16 @@ namespace MosaicCensorSystem.Detection
             // CUDA 우선, CPU 자동 폴백 모델 로드
             LoadModelWithAutoFallback();
 
-            // 설정값들 초기화 - 기본 신뢰도를 0.2로 설정
-            ConfThreshold = 0.2f; // 0.35f에서 0.2f로 변경
-            Targets = new List<string> { "얼굴" };
-            Strength = 15;
+            // 설정값들 초기화
+            ConfThreshold = 0.3f; // 가이드 권장값
+            Targets = new List<string> { "눈", "손" }; // 가이드의 기본 타겟
+            Strength = 15; // 가이드 권장값
+            CurrentCensorType = CensorType.Mosaic; // 기본값
 
             Console.WriteLine($"🎯 기본 타겟: {string.Join(", ", Targets)}");
-            Console.WriteLine($"⚙️ 기본 설정: 강도={Strength}, 신뢰도={ConfThreshold}");
+            Console.WriteLine($"⚙️ 기본 설정: 강도={Strength}, 신뢰도={ConfThreshold}, 타입={CurrentCensorType}");
             Console.WriteLine($"🚀 가속 모드: {accelerationMode}");
-            Console.WriteLine($"📊 SortTracker 활성화 - 모자이크 캐싱으로 성능 향상");
+            Console.WriteLine($"📊 SortTracker 활성화 - 검열 효과 캐싱으로 성능 향상");
         }
 
         private void LoadModelWithAutoFallback()
@@ -199,8 +214,6 @@ namespace MosaicCensorSystem.Detection
                 Console.WriteLine("🎯 CUDA GPU 가속 시도 중...");
                 
                 var sessionOptions = new SessionOptions();
-                
-                // CUDA 설정 (최고 성능)
                 sessionOptions.AppendExecutionProvider_CUDA(0);
                 sessionOptions.EnableCpuMemArena = true;
                 sessionOptions.EnableMemoryPattern = true;
@@ -210,8 +223,6 @@ namespace MosaicCensorSystem.Detection
                 sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
                 
                 model = new InferenceSession(this.modelPath, sessionOptions);
-                
-                // CUDA 테스트
                 TestModelInference();
                 return true;
             }
@@ -231,8 +242,6 @@ namespace MosaicCensorSystem.Detection
                 Console.WriteLine("🎯 DirectML GPU 가속 시도 중...");
                 
                 var sessionOptions = new SessionOptions();
-                
-                // DirectML 설정 (Windows GPU 가속)
                 sessionOptions.AppendExecutionProvider_DML(0);
                 sessionOptions.EnableCpuMemArena = true;
                 sessionOptions.EnableMemoryPattern = true;
@@ -242,8 +251,6 @@ namespace MosaicCensorSystem.Detection
                 sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
                 
                 model = new InferenceSession(this.modelPath, sessionOptions);
-                
-                // DirectML 테스트
                 TestModelInference();
                 return true;
             }
@@ -273,8 +280,6 @@ namespace MosaicCensorSystem.Detection
                 };
                 
                 model = new InferenceSession(this.modelPath, sessionOptions);
-                
-                // 최적화된 CPU 테스트
                 TestModelInference();
                 return true;
             }
@@ -299,8 +304,6 @@ namespace MosaicCensorSystem.Detection
                 };
                 
                 model = new InferenceSession(this.modelPath, sessionOptions);
-                
-                // 기본 CPU 테스트
                 TestModelInference();
                 return true;
             }
@@ -317,7 +320,7 @@ namespace MosaicCensorSystem.Detection
         {
             if (model == null) return;
             
-            // 더미 입력으로 모델 테스트
+            // 가이드에 따른 정확한 입력 크기로 테스트
             var testInput = new DenseTensor<float>(new[] { 1, 3, 640, 640 });
             var inputs = new List<NamedOnnxValue>
             {
@@ -327,15 +330,13 @@ namespace MosaicCensorSystem.Detection
             using var results = model.Run(inputs);
             var output = results.FirstOrDefault()?.AsEnumerable<float>().ToArray();
             
-            if (output == null || output.Length == 0)
+            // 가이드에 따른 출력 크기 검증: (1, 18, 8400)
+            if (output == null || output.Length != 18 * 8400)
             {
-                throw new Exception("모델 출력이 비어있음");
+                throw new Exception($"예상치 못한 모델 출력 크기: {output?.Length}, 예상: {18 * 8400}");
             }
-        }
-
-        public void SetTargetClasses(List<string> selectedEnglishNames)
-        {
-            targetClassNames = selectedEnglishNames ?? new();
+            
+            Console.WriteLine("✅ 모델 출력 형식 검증 완료: (1, 18, 8400)");
         }
 
         public void SetTargets(List<string> targets)
@@ -350,6 +351,26 @@ namespace MosaicCensorSystem.Detection
             Console.WriteLine($"💪 강도 변경: {Strength}");
         }
 
+        public void SetCensorType(CensorType censorType)
+        {
+            CurrentCensorType = censorType;
+            
+            // 검열 타입이 변경되면 모든 캐시 무효화
+            lock (trackingLock)
+            {
+                foreach (var trackedObj in trackedObjects.Values)
+                {
+                    if (trackedObj.LastCensorType != censorType)
+                    {
+                        trackedObj.CachedCensorRegion?.Dispose();
+                        trackedObj.CachedCensorRegion = null;
+                    }
+                }
+            }
+            
+            Console.WriteLine($"🎨 검열 타입 변경: {censorType}");
+        }
+
         public List<Detection> DetectObjects(Mat frame)
         {
             if (model == null || frame == null || frame.Empty())
@@ -360,12 +381,13 @@ namespace MosaicCensorSystem.Detection
                 var startTime = DateTime.Now;
                 frameCounter++;
 
-                // 전처리
-                var inputTensor = PreprocessFrame(frame);
-                if (inputTensor == null)
+                // 가이드에 따른 전처리
+                var (inputData, scale, padX, padY, originalWidth, originalHeight) = PreprocessImage(frame);
+                if (inputData == null)
                     return new List<Detection>();
 
                 // YOLO 추론
+                var inputTensor = new DenseTensor<float>(inputData, new[] { 1, 3, 640, 640 });
                 var inputs = new List<NamedOnnxValue>
                 {
                     NamedOnnxValue.CreateFromTensor("images", inputTensor)
@@ -377,8 +399,8 @@ namespace MosaicCensorSystem.Detection
                 if (output == null)
                     return new List<Detection>();
 
-                // 후처리 - 타겟 필터링 포함
-                var rawDetections = PostprocessOutput(output, frame.Width, frame.Height);
+                // 가이드에 따른 후처리
+                var rawDetections = PostprocessOutput(output, scale, padX, padY, originalWidth, originalHeight);
 
                 // SortTracker 적용
                 var trackedDetections = ApplyTracking(rawDetections);
@@ -406,6 +428,155 @@ namespace MosaicCensorSystem.Detection
             catch (Exception e)
             {
                 Console.WriteLine($"❌ 객체 감지 오류: {e.Message}");
+                return new List<Detection>();
+            }
+        }
+
+        /// <summary>
+        /// 가이드에 따른 이미지 전처리 (letterbox 포함)
+        /// </summary>
+        private (float[]? inputData, float scale, int padX, int padY, int originalWidth, int originalHeight) PreprocessImage(Mat frame)
+        {
+            try
+            {
+                int inputSize = 640;
+                int originalWidth = frame.Width;
+                int originalHeight = frame.Height;
+
+                // 비율 유지 리사이즈 계산
+                float scale = Math.Min((float)inputSize / originalWidth, (float)inputSize / originalHeight);
+                int newWidth = (int)(originalWidth * scale);
+                int newHeight = (int)(originalHeight * scale);
+
+                // 패딩 계산 (letterbox)
+                int padX = (inputSize - newWidth) / 2;
+                int padY = (inputSize - newHeight) / 2;
+
+                // 리사이즈
+                using var resized = new Mat();
+                Cv2.Resize(frame, resized, new OpenCvSharp.Size(newWidth, newHeight));
+
+                // 패딩 추가
+                using var padded = new Mat();
+                Cv2.CopyMakeBorder(resized, padded, padY, padY, padX, padX, BorderTypes.Constant, new Scalar(114, 114, 114));
+
+                // BGR to RGB 변환
+                using var rgb = new Mat();
+                Cv2.CvtColor(padded, rgb, ColorConversionCodes.BGR2RGB);
+
+                // 정규화 및 NCHW 형식으로 변환
+                var inputData = new float[3 * 640 * 640];
+                var indexer = rgb.GetGenericIndexer<Vec3b>();
+                
+                for (int h = 0; h < 640; h++)
+                {
+                    for (int w = 0; w < 640; w++)
+                    {
+                        var pixel = indexer[h, w];
+                        // NCHW 형식: [batch, channel, height, width]
+                        inputData[0 * 640 * 640 + h * 640 + w] = pixel.Item0 / 255.0f; // R
+                        inputData[1 * 640 * 640 + h * 640 + w] = pixel.Item1 / 255.0f; // G  
+                        inputData[2 * 640 * 640 + h * 640 + w] = pixel.Item2 / 255.0f; // B
+                    }
+                }
+
+                return (inputData, scale, padX, padY, originalWidth, originalHeight);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"❌ 전처리 오류: {e.Message}");
+                return (null, 1.0f, 0, 0, frame.Width, frame.Height);
+            }
+        }
+
+        /// <summary>
+        /// 가이드에 따른 후처리 (좌표 변환 포함)
+        /// </summary>
+        private List<Detection> PostprocessOutput(float[] output, float scale, int padX, int padY, int originalWidth, int originalHeight)
+        {
+            var detections = new List<Detection>();
+
+            try
+            {
+                const int numClasses = 14;
+                const int numDetections = 8400;
+                
+                if (output.Length != 18 * numDetections)
+                {
+                    Console.WriteLine($"❌ 예상치 못한 출력 크기: {output.Length}, 예상: {18 * numDetections}");
+                    return detections;
+                }
+
+                for (int i = 0; i < numDetections; i++)
+                {
+                    // bbox 좌표 (center format)
+                    float centerX = output[0 * numDetections + i];
+                    float centerY = output[1 * numDetections + i];
+                    float width = output[2 * numDetections + i];
+                    float height = output[3 * numDetections + i];
+
+                    // 클래스 확률 (4~17번 채널)
+                    float maxScore = 0;
+                    int maxClass = -1;
+                    for (int c = 0; c < numClasses; c++)
+                    {
+                        float score = output[(4 + c) * numDetections + i];
+                        if (score > maxScore)
+                        {
+                            maxScore = score;
+                            maxClass = c;
+                        }
+                    }
+
+                    // 신뢰도 필터링
+                    if (maxScore > ConfThreshold && classNames.ContainsKey(maxClass))
+                    {
+                        string className = classNames[maxClass];
+                        
+                        // 타겟 필터링
+                        if (!Targets.Contains(className))
+                            continue;
+
+                        // 좌표 변환 (패딩 보정 + 스케일링)
+                        float x1 = (centerX - width / 2 - padX) / scale;
+                        float y1 = (centerY - height / 2 - padY) / scale;
+                        float x2 = (centerX + width / 2 - padX) / scale;
+                        float y2 = (centerY + height / 2 - padY) / scale;
+
+                        // 경계 확인
+                        x1 = Math.Max(0, Math.Min(x1, originalWidth - 1));
+                        y1 = Math.Max(0, Math.Min(y1, originalHeight - 1));
+                        x2 = Math.Max(0, Math.Min(x2, originalWidth - 1));
+                        y2 = Math.Max(0, Math.Min(y2, originalHeight - 1));
+
+                        int boxWidth = (int)(x2 - x1);
+                        int boxHeight = (int)(y2 - y1);
+                        
+                        if (boxWidth > 10 && boxHeight > 10)
+                        {
+                            var detection = new Detection
+                            {
+                                ClassName = className,
+                                Confidence = maxScore,
+                                BBox = new int[] { (int)x1, (int)y1, (int)x2, (int)y2 },
+                                ClassId = maxClass
+                            };
+                            detections.Add(detection);
+                        }
+                    }
+                }
+
+                // NMS 적용
+                if (detections.Count > 0)
+                {
+                    detections = ApplyNMS(detections);
+                }
+
+                return detections;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"❌ 후처리 오류: {e.Message}");
                 return new List<Detection>();
             }
         }
@@ -446,6 +617,8 @@ namespace MosaicCensorSystem.Detection
                             BoundingBox = trackedBox,
                             LastConfidence = detection.Confidence,
                             StableFrameCount = 1,
+                            LastCensorType = CurrentCensorType,
+                            LastStrength = Strength,
                             LastUpdated = DateTime.Now
                         };
                     }
@@ -468,8 +641,18 @@ namespace MosaicCensorSystem.Detection
                         {
                             trackedObj.StableFrameCount = 1;
                             // 영역이 많이 변했으면 캐시 무효화
-                            trackedObj.CachedMosaicRegion?.Dispose();
-                            trackedObj.CachedMosaicRegion = null;
+                            trackedObj.CachedCensorRegion?.Dispose();
+                            trackedObj.CachedCensorRegion = null;
+                        }
+
+                        // 검열 설정이 변경되었으면 캐시 무효화
+                        if (trackedObj.LastCensorType != CurrentCensorType || 
+                            trackedObj.LastStrength != Strength)
+                        {
+                            trackedObj.CachedCensorRegion?.Dispose();
+                            trackedObj.CachedCensorRegion = null;
+                            trackedObj.LastCensorType = CurrentCensorType;
+                            trackedObj.LastStrength = Strength;
                         }
 
                         trackedObj.BoundingBox = trackedBox;
@@ -488,281 +671,17 @@ namespace MosaicCensorSystem.Detection
         }
 
         /// <summary>
-        /// 만료된 트랙 정리
+        /// NMS 적용
         /// </summary>
-        private void CleanupExpiredTracks()
-        {
-            lock (trackingLock)
-            {
-                var expiredTracks = trackedObjects.Where(kvp => 
-                    (DateTime.Now - kvp.Value.LastUpdated).TotalSeconds > 2.0
-                ).Select(kvp => kvp.Key).ToList();
-
-                foreach (var trackId in expiredTracks)
-                {
-                    trackedObjects[trackId].Dispose();
-                    trackedObjects.Remove(trackId);
-                }
-
-                if (expiredTracks.Count > 0)
-                {
-                    Console.WriteLine($"🧹 만료된 트랙 정리: {expiredTracks.Count}개");
-                }
-            }
-        }
-
-        /// <summary>
-        /// 캐싱 최적화된 모자이크 적용 메서드 (MainForm.cs에서 사용)
-        /// </summary>
-        public void ApplySingleMosaicOptimized(Mat processedFrame, Detection detection)
-        {
-            try
-            {
-                var bbox = detection.BBox;
-                int x1 = bbox[0], y1 = bbox[1], x2 = bbox[2], y2 = bbox[3];
-                
-                if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= processedFrame.Width && y2 <= processedFrame.Height)
-                {
-                    lock (trackingLock)
-                    {
-                        // 트래킹된 객체이고 안정적인 경우 캐시 사용
-                        if (detection.TrackId != -1 && trackedObjects.ContainsKey(detection.TrackId))
-                        {
-                            var trackedObj = trackedObjects[detection.TrackId];
-
-                            // 안정적인 객체이고 캐시된 모자이크가 있는 경우
-                            if (detection.IsStable && trackedObj.CachedMosaicRegion != null)
-                            {
-                                try
-                                {
-                                    using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
-                                    {
-                                        // 캐시된 모자이크 크기가 현재 영역과 일치하는지 확인
-                                        if (trackedObj.CachedMosaicRegion.Width == (x2 - x1) && 
-                                            trackedObj.CachedMosaicRegion.Height == (y2 - y1))
-                                        {
-                                            trackedObj.CachedMosaicRegion.CopyTo(region);
-                                            cacheHits++;
-                                            return;
-                                        }
-                                    }
-                                }
-                                catch (Exception e)
-                                {
-                                    Console.WriteLine($"⚠️ 캐시된 모자이크 적용 실패: {e.Message}");
-                                }
-                            }
-
-                            // 캐시 미스 - 새로운 모자이크 생성 및 캐싱
-                            using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
-                            {
-                                if (!region.Empty())
-                                {
-                                    using (var mosaicRegion = ApplyMosaic(region, Strength))
-                                    {
-                                        mosaicRegion.CopyTo(region);
-
-                                        // 안정적인 객체인 경우 모자이크 캐싱
-                                        if (detection.IsStable)
-                                        {
-                                            trackedObj.CachedMosaicRegion?.Dispose();
-                                            trackedObj.CachedMosaicRegion = mosaicRegion.Clone();
-                                        }
-                                    }
-                                    cacheMisses++;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            // 트래킹되지 않은 객체 - 일반 모자이크 적용
-                            using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
-                            {
-                                if (!region.Empty())
-                                {
-                                    using (var mosaicRegion = ApplyMosaic(region, Strength))
-                                    {
-                                        mosaicRegion.CopyTo(region);
-                                    }
-                                }
-                            }
-                            cacheMisses++;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"⚠️ 최적화된 모자이크 적용 오류: {ex.Message}");
-            }
-        }
-
-        private DenseTensor<float>? PreprocessFrame(Mat frame)
-        {
-            try
-            {
-                // 640x640으로 리사이즈
-                using var resized = new Mat();
-                Cv2.Resize(frame, resized, new OpenCvSharp.Size(640, 640));
-
-                // BGR to RGB 변환
-                using var rgb = new Mat();
-                Cv2.CvtColor(resized, rgb, ColorConversionCodes.BGR2RGB);
-
-                // 정규화 및 텐서 변환
-                var tensor = new DenseTensor<float>(new[] { 1, 3, 640, 640 });
-
-                // OpenCV Mat을 직접 사용한 안전한 픽셀 접근
-                var indexer = rgb.GetGenericIndexer<Vec3b>();
-                
-                for (int h = 0; h < 640; h++)
-                {
-                    for (int w = 0; w < 640; w++)
-                    {
-                        var pixel = indexer[h, w];
-                        // RGB 순서로 저장 (OpenCV는 BGR)
-                        tensor[0, 0, h, w] = pixel.Item2 / 255.0f; // R
-                        tensor[0, 1, h, w] = pixel.Item1 / 255.0f; // G  
-                        tensor[0, 2, h, w] = pixel.Item0 / 255.0f; // B
-                    }
-                }
-
-                return tensor;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"❌ 전처리 오류: {e.Message}");
-                return null;
-            }
-        }
-
-        private List<Detection> PostprocessOutput(float[] output, int originalWidth, int originalHeight)
-        {
-            var detections = new List<Detection>();
-
-            try
-            {
-                const int numFeatures = 19;
-                const int numDetections = 8400;
-                const int numClasses = 14;
-                
-                if (output.Length != numFeatures * numDetections)
-                {
-                    Console.WriteLine($"❌ 예상치 못한 출력 크기: {output.Length}, 예상: {numFeatures * numDetections}");
-                    return detections;
-                }
-
-                for (int detIndex = 0; detIndex < numDetections; detIndex++)
-                {
-                    // 좌표 추출
-                    float centerX = output[0 * numDetections + detIndex];
-                    float centerY = output[1 * numDetections + detIndex];
-                    float width = output[2 * numDetections + detIndex];
-                    float height = output[3 * numDetections + detIndex];
-                    float objectConfidence = output[4 * numDetections + detIndex];
-
-                    // 클래스별 확률 추출
-                    float maxClassProb = 0;
-                    int maxClassIndex = 0;
-                    
-                    for (int classIndex = 0; classIndex < numClasses; classIndex++)
-                    {
-                        float classProb = output[(5 + classIndex) * numDetections + detIndex];
-                        if (classProb > maxClassProb)
-                        {
-                            maxClassProb = classProb;
-                            maxClassIndex = classIndex;
-                        }
-                    }
-
-                    // 신뢰도 체크
-                    if (maxClassProb > ConfThreshold && maxClassIndex < classNames.Count)
-                    {
-                        string className = classNames[maxClassIndex];
-                        
-                        // 🔧 디버깅: 감지된 모든 클래스 로그 (필터링 전)
-                        if (frameCounter % 30 == 0) // 30프레임마다 한 번씩만 출력
-                        {
-                            Console.WriteLine($"🔍 감지된 클래스: {className} (신뢰도: {maxClassProb:F2}, 선택된 타겟: [{string.Join(", ", Targets)}])");
-                        }
-                        
-                        // 🔧 중요: 선택된 타겟만 필터링 (UI에서 체크된 항목만)
-                        if (!Targets.Contains(className))
-                        {
-                            // 🔧 디버깅: 필터링된 클래스 로그
-                            if (frameCounter % 30 == 0)
-                            {
-                                Console.WriteLine($"❌ 필터링됨: {className} (선택된 타겟에 없음)");
-                            }
-                            continue; // 선택되지 않은 타겟은 건너뛰기
-                        }
-                        
-                        // 🔧 디버깅: 통과된 클래스 로그
-                        if (frameCounter % 30 == 0)
-                        {
-                            Console.WriteLine($"✅ 통과됨: {className} (선택된 타겟에 포함)");
-                        }
-
-                        if (!Targets.Contains(classNmae))
-                            continue;
-
-                        // 좌표 변환
-                            float scaleX = originalWidth / 640.0f;
-                        float scaleY = originalHeight / 640.0f;
-
-                        int x1 = (int)((centerX - width / 2) * scaleX);
-                        int y1 = (int)((centerY - height / 2) * scaleY);
-                        int x2 = (int)((centerX + width / 2) * scaleX);
-                        int y2 = (int)((centerY + height / 2) * scaleY);
-
-                        // 경계 확인
-                        x1 = Math.Max(0, Math.Min(x1, originalWidth - 1));
-                        y1 = Math.Max(0, Math.Min(y1, originalHeight - 1));
-                        x2 = Math.Max(0, Math.Min(x2, originalWidth - 1));
-                        y2 = Math.Max(0, Math.Min(y2, originalHeight - 1));
-
-                        int boxWidth = x2 - x1;
-                        int boxHeight = y2 - y1;
-                        
-                        if (boxWidth > 10 && boxHeight > 10)
-                        {
-                            var detection = new Detection
-                            {
-                                ClassName = className,
-                                Confidence = maxClassProb,
-                                BBox = new int[] { x1, y1, x2, y2 },
-                                ClassId = maxClassIndex
-                            };
-                            detections.Add(detection);
-                        }
-                    }
-                }
-
-                // NMS 적용
-                if (detections.Count > 0)
-                {
-                    detections = ApplyNMS(detections);
-                }
-
-                return detections;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"❌ 후처리 오류: {e.Message}");
-                return new List<Detection>();
-            }
-        }
-
         private List<Detection> ApplyNMS(List<Detection> detections)
         {
             if (detections.Count == 0) return detections;
 
             var nmsThresholds = new Dictionary<string, float>
             {
-                ["얼굴"] = 0.3f, ["가슴"] = 0.4f, ["보지"] = 0.3f, ["자지"] = 0.3f,
-                ["팬티"] = 0.4f, ["눈"] = 0.2f, ["손"] = 0.5f, ["발"] = 0.5f,
-                ["몸 전체"] = 0.6f, ["여성"] = 0.7f, ["겨드랑이"] = 0.4f,
-                ["신발"] = 0.5f, ["가슴_옷"] = 0.4f, ["보지_옷"] = 0.4f, ["교미"] = 0.3f
+                ["얼굴"] = 0.3f, ["가슴"] = 0.4f, ["겨드랑이"] = 0.4f, ["보지"] = 0.3f, ["발"] = 0.5f,
+                ["몸 전체"] = 0.6f, ["자지"] = 0.3f, ["팬티"] = 0.4f, ["눈"] = 0.2f, ["손"] = 0.5f,
+                ["교미"] = 0.3f, ["신발"] = 0.5f, ["가슴_옷"] = 0.4f, ["여성"] = 0.7f
             };
 
             detections = detections.OrderByDescending(d => d.Confidence).ToList();
@@ -774,7 +693,7 @@ namespace MosaicCensorSystem.Detection
                 keep.Add(current);
                 detections.RemoveAt(0);
 
-                float nmsThreshold = nmsThresholds.GetValueOrDefault(current.ClassName, 0.4f);
+                float nmsThreshold = nmsThresholds.GetValueOrDefault(current.ClassName, 0.45f);
 
                 for (int i = detections.Count - 1; i >= 0; i--)
                 {
@@ -809,6 +728,128 @@ namespace MosaicCensorSystem.Detection
             return union > 0 ? intersection / union : 0;
         }
 
+        /// <summary>
+        /// 만료된 트랙 정리
+        /// </summary>
+        private void CleanupExpiredTracks()
+        {
+            lock (trackingLock)
+            {
+                var expiredTracks = trackedObjects.Where(kvp => 
+                    (DateTime.Now - kvp.Value.LastUpdated).TotalSeconds > 2.0
+                ).Select(kvp => kvp.Key).ToList();
+
+                foreach (var trackId in expiredTracks)
+                {
+                    trackedObjects[trackId].Dispose();
+                    trackedObjects.Remove(trackId);
+                }
+
+                if (expiredTracks.Count > 0)
+                {
+                    Console.WriteLine($"🧹 만료된 트랙 정리: {expiredTracks.Count}개");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 캐싱 최적화된 검열 효과 적용 메서드 (MainForm.cs에서 사용)
+        /// </summary>
+        public void ApplySingleCensorOptimized(Mat processedFrame, Detection detection)
+        {
+            try
+            {
+                var bbox = detection.BBox;
+                int x1 = bbox[0], y1 = bbox[1], x2 = bbox[2], y2 = bbox[3];
+                
+                if (x2 > x1 && y2 > y1 && x1 >= 0 && y1 >= 0 && x2 <= processedFrame.Width && y2 <= processedFrame.Height)
+                {
+                    lock (trackingLock)
+                    {
+                        // 트래킹된 객체이고 안정적인 경우 캐시 사용
+                        if (detection.TrackId != -1 && trackedObjects.ContainsKey(detection.TrackId))
+                        {
+                            var trackedObj = trackedObjects[detection.TrackId];
+
+                            // 안정적인 객체이고 캐시된 검열 효과가 있는 경우
+                            if (detection.IsStable && trackedObj.CachedCensorRegion != null &&
+                                trackedObj.LastCensorType == CurrentCensorType &&
+                                trackedObj.LastStrength == Strength)
+                            {
+                                try
+                                {
+                                    using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                                    {
+                                        // 캐시된 검열 효과 크기가 현재 영역과 일치하는지 확인
+                                        if (trackedObj.CachedCensorRegion.Width == (x2 - x1) && 
+                                            trackedObj.CachedCensorRegion.Height == (y2 - y1))
+                                        {
+                                            trackedObj.CachedCensorRegion.CopyTo(region);
+                                            cacheHits++;
+                                            return;
+                                        }
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    Console.WriteLine($"⚠️ 캐시된 검열 효과 적용 실패: {e.Message}");
+                                }
+                            }
+
+                            // 캐시 미스 - 새로운 검열 효과 생성 및 캐싱
+                            using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                            {
+                                if (!region.Empty())
+                                {
+                                    using (var censoredRegion = ApplyCensor(region, Strength))
+                                    {
+                                        censoredRegion.CopyTo(region);
+
+                                        // 안정적인 객체인 경우 검열 효과 캐싱
+                                        if (detection.IsStable)
+                                        {
+                                            trackedObj.CachedCensorRegion?.Dispose();
+                                            trackedObj.CachedCensorRegion = censoredRegion.Clone();
+                                            trackedObj.LastCensorType = CurrentCensorType;
+                                            trackedObj.LastStrength = Strength;
+                                        }
+                                    }
+                                    cacheMisses++;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // 트래킹되지 않은 객체 - 일반 검열 효과 적용
+                            using (var region = new Mat(processedFrame, new Rect(x1, y1, x2 - x1, y2 - y1)))
+                            {
+                                if (!region.Empty())
+                                {
+                                    using (var censoredRegion = ApplyCensor(region, Strength))
+                                    {
+                                        censoredRegion.CopyTo(region);
+                                    }
+                                }
+                            }
+                            cacheMisses++;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ 최적화된 검열 효과 적용 오류: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 기존 호환성을 위한 메서드
+        /// </summary>
+        public void ApplySingleMosaicOptimized(Mat processedFrame, Detection detection)
+        {
+            ApplySingleCensorOptimized(processedFrame, detection);
+        }
+
         public (Mat processedFrame, List<Detection> detections) DetectObjectsDetailed(Mat frame)
         {
             var detections = DetectObjects(frame);
@@ -816,15 +857,27 @@ namespace MosaicCensorSystem.Detection
 
             foreach (var detection in detections)
             {
-                // 여기서 다시 체크할 필요가 없음 - 이미 필터링됨
-                ApplySingleMosaicOptimized(processedFrame, detection);
+                ApplySingleCensorOptimized(processedFrame, detection);
             }
 
             return (processedFrame, detections);
         }
 
         /// <summary>
-        /// 기본 모자이크 적용 메서드 (단일 이미지용)
+        /// 현재 설정에 따른 검열 효과 적용 (모자이크 또는 블러)
+        /// </summary>
+        public Mat ApplyCensor(Mat image, int? strength = null)
+        {
+            return CurrentCensorType switch
+            {
+                CensorType.Mosaic => ApplyMosaic(image, strength),
+                CensorType.Blur => ApplyBlur(image, strength),
+                _ => ApplyMosaic(image, strength)
+            };
+        }
+
+        /// <summary>
+        /// 모자이크 효과 적용
         /// </summary>
         public Mat ApplyMosaic(Mat image, int? strength = null)
         {
@@ -857,66 +910,36 @@ namespace MosaicCensorSystem.Detection
         }
 
         /// <summary>
-        /// DetectionResult를 사용하는 오버로드 메서드 (기존 코드와의 호환성)
+        /// 블러 효과 적용
         /// </summary>
-        public Mat ApplyMosaic(Mat image, List<DetectionResult> detections, List<string> selectedTargets, int? strength = null)
+        public Mat ApplyBlur(Mat image, int? strength = null)
         {
-            int mosaicStrength = strength ?? Strength;
-
+            int blurStrength = strength ?? Strength;
+            
             if (image == null || image.Empty())
                 return image?.Clone() ?? new Mat();
 
             try
             {
-                Mat result = image.Clone();
+                // 블러 강도를 커널 크기로 변환 (홀수로 만들기)
+                int kernelSize = Math.Max(3, blurStrength * 2 + 1);
+                if (kernelSize % 2 == 0) kernelSize += 1;
 
-                foreach (var detection in detections)
-                {
-                    string className = detection.ClassName;
+                var blurred = new Mat();
+                
+                // 가우시안 블러 적용
+                Cv2.GaussianBlur(image, blurred, new OpenCvSharp.Size(kernelSize, kernelSize), 0);
 
-                    // 선택된 타겟 필터링
-                    if (!selectedTargets.Contains(className))
-                        continue;
-
-                    var bbox = detection.BBox;
-                    int x1 = Math.Max(0, bbox[0]);
-                    int y1 = Math.Max(0, bbox[1]);
-                    int x2 = Math.Min(image.Width, bbox[2]);
-                    int y2 = Math.Min(image.Height, bbox[3]);
-
-                    int w = x2 - x1;
-                    int h = y2 - y1;
-
-                    if (w <= 0 || h <= 0) continue;
-
-                    Rect roi = new Rect(x1, y1, w, h);
-                    Mat region = new Mat(result, roi);
-
-                    int smallW = Math.Max(1, w / mosaicStrength);
-                    int smallH = Math.Max(1, h / mosaicStrength);
-
-                    using var small = new Mat();
-                    Cv2.Resize(region, small, new OpenCvSharp.Size(smallW, smallH), interpolation: InterpolationFlags.Linear);
-
-                    Mat mosaicRegion = new Mat();
-                    Cv2.Resize(small, mosaicRegion, new OpenCvSharp.Size(w, h), interpolation: InterpolationFlags.Nearest);
-
-                    mosaicRegion.CopyTo(new Mat(result, roi));
-                    
-                    // 메모리 정리
-                    mosaicRegion.Dispose();
-                }
-
-                return result;
+                return blurred;
             }
             catch (Exception e)
             {
-                Console.WriteLine($"⚠️ 모자이크 적용 오류: {e.Message}");
+                Console.WriteLine($"⚠️ 블러 적용 오류: {e.Message}");
                 return image.Clone();
             }
         }
 
-        public Mat? CreateMosaicForRegion(Mat frame, int x1, int y1, int x2, int y2, int? strength = null)
+        public Mat? CreateCensorForRegion(Mat frame, int x1, int y1, int x2, int y2, int? strength = null)
         {
             try
             {
@@ -927,11 +950,11 @@ namespace MosaicCensorSystem.Detection
                 if (region.Empty())
                     return null;
 
-                return ApplyMosaic(region, strength);
+                return ApplyCensor(region, strength);
             }
             catch (Exception e)
             {
-                Console.WriteLine($"⚠️ 영역 모자이크 생성 오류: {e.Message}");
+                Console.WriteLine($"⚠️ 영역 검열 효과 생성 오류: {e.Message}");
                 return null;
             }
         }
@@ -984,6 +1007,10 @@ namespace MosaicCensorSystem.Detection
                     case "strength":
                         Strength = Math.Max(1, Math.Min(50, Convert.ToInt32(kvp.Value)));
                         break;
+                    case "censor_type":
+                        if (kvp.Value is CensorType censorType)
+                            SetCensorType(censorType);
+                        break;
                 }
             }
 
@@ -997,7 +1024,7 @@ namespace MosaicCensorSystem.Detection
 
         public List<string> GetAvailableClasses()
         {
-            return new List<string>(classNames);
+            return classNames.Values.ToList();
         }
 
         public void ResetStats()
@@ -1029,18 +1056,27 @@ namespace MosaicCensorSystem.Detection
 
         public void Dispose()
         {
-            // 트래킹된 객체들 정리
-            lock (trackingLock)
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (disposing)
             {
-                foreach (var trackedObj in trackedObjects.Values)
+                // 트래킹된 객체들 정리
+                lock (trackingLock)
                 {
-                    trackedObj.Dispose();
+                    foreach (var trackedObj in trackedObjects.Values)
+                    {
+                        trackedObj.Dispose();
+                    }
+                    trackedObjects.Clear();
                 }
-                trackedObjects.Clear();
+                
+                model?.Dispose();
+                Console.WriteLine($"🧹 {accelerationMode} 검열 프로세서 + SortTracker 리소스 정리됨");
             }
-            
-            model?.Dispose();
-            Console.WriteLine($"🧹 {accelerationMode} MosaicProcessor + SortTracker 리소스 정리됨");
         }
     }
 }

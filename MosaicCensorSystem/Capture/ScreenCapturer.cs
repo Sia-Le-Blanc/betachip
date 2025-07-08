@@ -186,13 +186,16 @@ namespace MosaicCensorSystem.Capture
             Console.WriteLine("🔄 캡처 스레드 시작");
             var lastFrameTime = DateTime.Now;
             int retryCount = 0;
+            int consecutiveErrors = 0;
+            const int maxConsecutiveErrors = 10;
 
             while (!cancellationTokenSource.Token.IsCancellationRequested)
             {
                 try
                 {
-                    var elapsed = (DateTime.Now - lastFrameTime).TotalSeconds;
-                    if (elapsed < 0.01) // 최대 100 FPS
+                    // 프레임 레이트 제한 (최대 100 FPS)
+                    var elapsed = (DateTime.Now - lastFrameTime).TotalMilliseconds;
+                    if (elapsed < 10) // 10ms = 100fps
                     {
                         Thread.Sleep(1);
                         continue;
@@ -205,50 +208,94 @@ namespace MosaicCensorSystem.Capture
                     {
                         frameCount++;
                         
-                        // 큐가 가득 차면 이전 프레임 제거
-                        if (frameQueue.Count >= frameQueue.BoundedCapacity)
+                        // 큐가 가득 차면 이전 프레임 제거 (논블로킹)
+                        while (frameQueue.Count >= frameQueue.BoundedCapacity)
                         {
-                            if (frameQueue.TryTake(out var oldFrame))
+                            if (frameQueue.TryTake(out var oldFrame, 1))
                             {
                                 oldFrame?.Dispose();
                             }
+                            else
+                            {
+                                break; // 타임아웃 시 루프 탈출
+                            }
                         }
 
-                        frameQueue.TryAdd(frame);
-                        frame.Dispose();
+                        // 새 프레임 추가 (논블로킹)
+                        if (!frameQueue.TryAdd(frame, 1))
+                        {
+                            // 큐에 추가 실패시 프레임 폐기
+                            frame?.Dispose();
+                        }
+                        
                         retryCount = 0;
+                        consecutiveErrors = 0;
                     }
                     else
                     {
                         retryCount++;
+                        consecutiveErrors++;
+                        
                         if (retryCount > 5)
                         {
                             Console.WriteLine($"⚠️ 연속 {retryCount}회 캡처 실패");
                             retryCount = 0;
-                            Thread.Sleep(100);
+                        }
+                        
+                        if (consecutiveErrors > maxConsecutiveErrors)
+                        {
+                            Console.WriteLine($"❌ 연속 {consecutiveErrors}회 오류 발생 - 캡처 스레드 일시 정지");
+                            Thread.Sleep(1000); // 1초 대기 후 재시도
+                            consecutiveErrors = 0;
+                        }
+                        else
+                        {
+                            Thread.Sleep(50); // 50ms 대기
                         }
                     }
                 }
+                catch (ObjectDisposedException)
+                {
+                    // 정상적인 종료 상황
+                    Console.WriteLine("🛑 캡처 객체가 해제됨 - 스레드 종료");
+                    break;
+                }
                 catch (Exception e)
                 {
+                    consecutiveErrors++;
                     Console.WriteLine($"❌ 캡처 스레드 오류: {e.Message}");
-                    retryCount++;
-                    if (retryCount > 5)
+                    
+                    if (consecutiveErrors > maxConsecutiveErrors)
                     {
-                        retryCount = 0;
+                        Console.WriteLine($"❌ 치명적 오류 - 캡처 스레드 종료");
+                        break;
                     }
-                    Thread.Sleep(100);
+                    
+                    Thread.Sleep(Math.Min(consecutiveErrors * 100, 1000)); // 점진적 대기
                 }
             }
 
             Console.WriteLine("🛑 캡처 스레드 종료");
+            
+            // 남은 프레임들 정리
+            try
+            {
+                while (frameQueue.TryTake(out var frame, 100))
+                {
+                    frame?.Dispose();
+                }
+            }
+            catch (Exception cleanupEx)
+            {
+                Console.WriteLine($"⚠️ 캡처 스레드 정리 중 오류: {cleanupEx.Message}");
+            }
         }
 
         private Mat? CaptureScreen()
         {
             IntPtr desktopDC = IntPtr.Zero;
             IntPtr memoryDC = IntPtr.Zero;
-            IntPtr bitmap = IntPtr.Zero;
+            IntPtr hBitmap = IntPtr.Zero;
             IntPtr oldBitmap = IntPtr.Zero;
             Bitmap? screenBitmap = null;
 
@@ -257,16 +304,15 @@ namespace MosaicCensorSystem.Capture
                 desktopDC = GetWindowDC(GetDesktopWindow());
                 memoryDC = CreateCompatibleDC(desktopDC);
 
-                bitmap = CreateCompatibleBitmap(desktopDC, screenWidth, screenHeight);
-                oldBitmap = SelectObject(memoryDC, bitmap);
+                hBitmap = CreateCompatibleBitmap(desktopDC, screenWidth, screenHeight);
+                oldBitmap = SelectObject(memoryDC, hBitmap);
 
                 BitBlt(memoryDC, 0, 0, screenWidth, screenHeight, desktopDC, screenLeft, screenTop, SRCCOPY);
 
-                using (bitmap tempBitmap = bitmap.FromHbitmap(bitmap))
-                {
-                    bitmap cloneBitmap = new bitmap(tempBitmap);
-                    screenBitmap = cloneBitmap;
-                }
+                // 올바른 Bitmap 생성 방법
+                screenBitmap = Bitmap.FromHbitmap(hBitmap);
+                
+                // Bitmap을 Mat로 변환
                 Mat img = BitmapConverter.ToMat(screenBitmap);
 
                 // BGRA -> BGR 변환 (필요한 경우)
@@ -335,8 +381,8 @@ namespace MosaicCensorSystem.Capture
                 
                 if (oldBitmap != IntPtr.Zero && memoryDC != IntPtr.Zero)
                     SelectObject(memoryDC, oldBitmap);
-                if (bitmap != IntPtr.Zero)
-                    DeleteObject(bitmap);
+                if (hBitmap != IntPtr.Zero)
+                    DeleteObject(hBitmap);
                 if (memoryDC != IntPtr.Zero)
                     DeleteObject(memoryDC);
                 if (desktopDC != IntPtr.Zero)

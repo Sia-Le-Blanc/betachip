@@ -75,7 +75,7 @@ namespace MosaicCensorSystem.UI
 
             // 설정 초기화
             Strength = Convert.ToInt32(config.GetValueOrDefault("default_strength", 25));
-            
+
             var defaultTargets = new List<string> { "얼굴", "가슴", "보지", "팬티" };
             if (config.GetValueOrDefault("default_targets", defaultTargets) is List<string> targets)
             {
@@ -85,7 +85,7 @@ namespace MosaicCensorSystem.UI
             {
                 Targets = defaultTargets;
             }
-            
+
             Running = false;
             RenderModeInfo = "기본 모드";
 
@@ -126,7 +126,7 @@ namespace MosaicCensorSystem.UI
             };
 
             titlePanel.Controls.Add(titleLabel);
-            
+
             // 드래그 이벤트
             titlePanel.MouseDown += OnTitleMouseDown;
             titlePanel.MouseMove += OnTitleMouseMove;
@@ -490,7 +490,7 @@ namespace MosaicCensorSystem.UI
         public List<string> GetSelectedTargets()
         {
             var selected = new List<string>();
-            
+
             foreach (var kvp in checkboxes)
             {
                 if (kvp.Value?.Checked == true)
@@ -521,7 +521,7 @@ namespace MosaicCensorSystem.UI
         public void SetRenderModeInfo(string infoText)
         {
             RenderModeInfo = infoText ?? "기본 모드";
-            
+
             if (renderModeLabel != null)
             {
                 renderModeLabel.Text = RenderModeInfo;
@@ -548,7 +548,7 @@ namespace MosaicCensorSystem.UI
                 strengthSlider?.Dispose();
                 confidenceSlider?.Dispose();
                 scrollableContainer?.Dispose();
-                
+
                 foreach (var checkbox in checkboxes.Values)
                 {
                     checkbox?.Dispose();
@@ -566,6 +566,32 @@ namespace MosaicCensorSystem.UI
     {
         public Signal StartCensoringSignal { get; }
         public Signal StopCensoringSignal { get; }
+        public List<string> GetSelectedModelClasses()
+        {
+            var selectedKorean = GetSelectedTargets();
+
+            return selectedKorean
+                .Select(kor => classNameMap.TryGetValue(kor, out var eng) ? eng : null)
+                .Where(eng => !string.IsNullOrEmpty(eng))
+                .ToList();
+        }
+
+        // 한글 → 영어 클래스 이름 매핑
+        private static readonly Dictionary<string, string> classNameMap = new()
+        {
+            { "얼굴", "face" },
+            { "눈", "eye" },
+            { "손", "hand" },
+            { "가슴", "breast" },
+            { "보지", "vagina" },
+            { "팬티", "panty" },
+            { "가슴_옷", "chest_clothes" },
+            { "몸 전체", "body" },
+            { "교미", "intercourse" },
+            { "겨드랑이", "armpit" }
+        };
+        
+
 
         public GUIController(Dictionary<string, object> config = null) : base(config)
         {
@@ -590,4 +616,6 @@ namespace MosaicCensorSystem.UI
             base.Dispose(disposing);
         }
     }
+    
+    
 }
