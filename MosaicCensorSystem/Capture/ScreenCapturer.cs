@@ -107,9 +107,10 @@ namespace MosaicCensorSystem.Capture
         {
             this.config = config ?? new Dictionary<string, object>();
             
-            captureDownscale = this.config.GetValueOrDefault("downscale", 1.0);
-            debugMode = this.config.GetValueOrDefault("debug_mode", false);
-            debugSaveInterval = this.config.GetValueOrDefault("debug_save_interval", 300);
+            // 안전한 타입 변환
+            captureDownscale = Convert.ToDouble(this.config.GetValueOrDefault("downscale", 1.0));
+            debugMode = Convert.ToBoolean(this.config.GetValueOrDefault("debug_mode", false));
+            debugSaveInterval = Convert.ToInt32(this.config.GetValueOrDefault("debug_save_interval", 300));
 
             // 전체 화면 크기 가져오기 (멀티 모니터 지원)
             screenLeft = SystemInformation.VirtualScreen.Left;
@@ -124,7 +125,7 @@ namespace MosaicCensorSystem.Capture
 
             monitor = new Rectangle(screenLeft, screenTop, screenWidth, screenHeight);
 
-            int queueSize = this.config.GetValueOrDefault("queue_size", 2);
+            int queueSize = Convert.ToInt32(this.config.GetValueOrDefault("queue_size", 2));
             frameQueue = new BlockingCollection<Mat>(queueSize);
             cancellationTokenSource = new CancellationTokenSource();
 
@@ -399,7 +400,7 @@ namespace MosaicCensorSystem.Capture
                     prevFrame?.Dispose();
                     prevFrame = frame.Clone();
 
-                    int logInterval = config.GetValueOrDefault("log_interval", 100);
+                    int logInterval = Convert.ToInt32(config.GetValueOrDefault("log_interval", 100));
                     if (frameCount % logInterval == 0)
                     {
                         Console.WriteLine($"📸 화면 캡처: 프레임 #{frameCount}, 크기: {frame.Size()}");
