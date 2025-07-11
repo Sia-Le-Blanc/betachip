@@ -1,5 +1,0 @@
-Error: [ErrorCode:InvalidProtobuf] Load model from Resources/best.onnx failed:Protobuf parsing failed.
-StackTrace:    at Microsoft.ML.OnnxRuntime.NativeApiStatus.VerifySuccess(IntPtr nativeStatus)
-   at Microsoft.ML.OnnxRuntime.InferenceSession.Init(String modelPath, SessionOptions options, PrePackedWeightsContainer prepackedWeightsContainer)
-   at Microsoft.ML.OnnxRuntime.InferenceSession..ctor(String modelPath, SessionOptions options)
-   at MosaicCensorSystem.Detection.MosaicProcessor..ctor(String modelPath, Dictionary`2 config) in C:\Users\Sia\OneDrive\바탕 화면\MosaicCensorSystem\MosaicCensorSystem\Detection\MosaicProcessor.cs:line 134

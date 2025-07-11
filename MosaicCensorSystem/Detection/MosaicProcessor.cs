@@ -86,31 +86,6 @@ namespace MosaicCensorSystem.Detection
     }
 
     /// <summary>
-    /// 검열 처리 인터페이스
-    /// </summary>
-    public interface IProcessor
-    {
-        void SetTargets(List<string> targets);
-        void SetStrength(int strength);
-        void SetCensorType(CensorType censorType);
-        List<Detection> DetectObjects(Mat frame);
-        (Mat processedFrame, List<Detection> detections) DetectObjectsDetailed(Mat frame);
-        Mat ApplyCensor(Mat image, int? strength = null);
-        Mat ApplyMosaic(Mat image, int? strength = null);
-        Mat ApplyBlur(Mat image, int? strength = null);
-        Mat CreateCensorForRegion(Mat frame, int x1, int y1, int x2, int y2, int? strength = null);
-        PerformanceStats GetPerformanceStats();
-        void UpdateConfig(Dictionary<string, object> kwargs);
-        bool IsModelLoaded();
-        List<string> GetAvailableClasses();
-        void ResetStats();
-        float ConfThreshold { get; set; }
-        List<string> Targets { get; }
-        int Strength { get; }
-        CensorType CurrentCensorType { get; }
-    }
-
-    /// <summary>
     /// ONNX 가이드 기반 완전 개선된 검열 프로세서
     /// </summary>
     public class MosaicProcessor : IProcessor, IDisposable

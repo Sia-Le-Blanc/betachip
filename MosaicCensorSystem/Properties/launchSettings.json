@@ -1,0 +1,20 @@
+{
+  "profiles": {
+    "MosaicCensorSystem": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development",
+        "ONNX_LOG_LEVEL": "Warning"
+      },
+      "workingDirectory": "$(ProjectDir)"
+    },
+    "MosaicCensorSystem (Release)": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Production",
+        "ONNX_LOG_LEVEL": "Error"
+      },
+      "workingDirectory": "$(ProjectDir)"
+    }
+  }
+}

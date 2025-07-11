@@ -8,6 +8,8 @@ using System.Runtime.InteropServices;
 using System.Runtime;
 using System.Linq;
 using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
+using System.Collections.Generic; 
 using MosaicCensorSystem.Diagnostics; // 추가된 using 문
 
 namespace MosaicCensorSystem
@@ -41,6 +43,13 @@ namespace MosaicCensorSystem
         [STAThread]
         static void Main()
         {
+            // 🧪 임시 ONNX 테스트 (맨 앞에 추가)
+            Console.WriteLine("🧪 ==========ONNX 상세 진단 테스트 시작==========");
+            TestOnnxModelDirectly();
+            Console.WriteLine("🧪 ==========ONNX 상세 진단 테스트 완료==========");
+            Console.WriteLine("계속하려면 아무 키나 누르세요...");
+            Console.ReadKey();
+            
             // 강화된 글로벌 예외 핸들러
             SetupGlobalExceptionHandlers();
             
@@ -67,6 +76,240 @@ namespace MosaicCensorSystem
             finally
             {
                 CleanupAndExit();
+            }
+        }
+
+        /// <summary>
+        /// 🧪 ONNX 모델 직접 테스트 (추가된 메서드)
+        /// </summary>
+        private static void TestOnnxModelDirectly()
+        {
+            Console.WriteLine("🧪 ONNX 모델 직접 테스트 시작");
+            
+            var modelPaths = new[]
+            {
+                "Resources/best.onnx",
+                "best.onnx",
+                Path.Combine(Environment.CurrentDirectory, "Resources", "best.onnx"),
+                Path.Combine(Environment.CurrentDirectory, "best.onnx"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "best.onnx"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "best.onnx")
+            };
+
+            Console.WriteLine($"📁 현재 작업 디렉토리: {Environment.CurrentDirectory}");
+            Console.WriteLine($"📁 실행 파일 위치: {AppDomain.CurrentDomain.BaseDirectory}");
+            
+            foreach (var modelPath in modelPaths)
+            {
+                Console.WriteLine($"\n🔍 테스트 경로: {modelPath}");
+                Console.WriteLine($"📁 절대 경로: {Path.GetFullPath(modelPath)}");
+                Console.WriteLine($"📁 파일 존재: {File.Exists(modelPath)}");
+                
+                if (File.Exists(modelPath))
+                {
+                    var fileInfo = new FileInfo(modelPath);
+                    Console.WriteLine($"📊 파일 크기: {fileInfo.Length / (1024 * 1024):F1} MB");
+                    Console.WriteLine($"📊 생성일: {fileInfo.CreationTime:yyyy-MM-dd HH:mm}");
+                    Console.WriteLine($"📊 수정일: {fileInfo.LastWriteTime:yyyy-MM-dd HH:mm}");
+                    
+                    // 파일 헤더 확인
+                    try
+                    {
+                        var header = File.ReadAllBytes(modelPath).Take(100).ToArray();
+                        var headerText = System.Text.Encoding.ASCII.GetString(header.Where(b => b >= 32 && b <= 126).ToArray());
+                        Console.WriteLine($"📊 파일 헤더: {headerText.Substring(0, Math.Min(50, headerText.Length))}...");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ 헤더 읽기 실패: {ex.Message}");
+                    }
+                    
+                    // ONNX Runtime 버전 확인
+                    try
+                    {
+                        Console.WriteLine("🔧 ONNX Runtime 정보:");
+                        var providers = OrtEnv.Instance().GetAvailableProviders();
+                        Console.WriteLine($"📊 사용 가능한 제공자: {providers.Length}개");
+                        foreach (var provider in providers)
+                        {
+                            Console.WriteLine($"  - {provider}");
+                        }
+                        
+                        // 어셈블리 버전 확인
+                        var onnxAssembly = typeof(InferenceSession).Assembly;
+                        Console.WriteLine($"📊 ONNX Runtime 어셈블리 버전: {onnxAssembly.GetName().Version}");
+                        Console.WriteLine($"📊 ONNX Runtime 파일 버전: {onnxAssembly.Location}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"❌ ONNX Runtime 정보 조회 실패: {ex.Message}");
+                    }
+                    
+                    // 모델 로딩 테스트
+                    Console.WriteLine("🔧 모델 로딩 테스트 시작...");
+                    
+                    // 1. 기본 세션 옵션으로 시도
+                    try
+                    {
+                        Console.WriteLine("  🔧 기본 세션 옵션으로 시도...");
+                        var sessionOptions = new SessionOptions
+                        {
+                            LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_VERBOSE
+                        };
+                        
+                        using var session = new InferenceSession(modelPath, sessionOptions);
+                        Console.WriteLine("  ✅ 기본 옵션 로딩 성공!");
+                        
+                        // 입력/출력 메타데이터 확인
+                        Console.WriteLine("  📊 입력 메타데이터:");
+                        foreach (var input in session.InputMetadata)
+                        {
+                            Console.WriteLine($"    {input.Key}: {string.Join("x", input.Value.Dimensions)} ({input.Value.ElementType})");
+                        }
+                        
+                        Console.WriteLine("  📊 출력 메타데이터:");
+                        foreach (var output in session.OutputMetadata)
+                        {
+                            Console.WriteLine($"    {output.Key}: {string.Join("x", output.Value.Dimensions)} ({output.Value.ElementType})");
+                        }
+                        
+                        // 간단한 추론 테스트
+                        TestInferenceWithModel(session);
+                        
+                        return; // 성공하면 다른 경로 테스트 생략
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"  ❌ 기본 옵션 실패: {ex.GetType().Name}: {ex.Message}");
+                        if (ex.InnerException != null)
+                        {
+                            Console.WriteLine($"    내부 오류: {ex.InnerException.Message}");
+                        }
+                    }
+                    
+                    // 2. 안전 모드로 시도
+                    try
+                    {
+                        Console.WriteLine("  🔧 안전 모드로 시도...");
+                        var sessionOptions = new SessionOptions
+                        {
+                            LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR,
+                            EnableCpuMemArena = false,
+                            EnableMemoryPattern = false,
+                            ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
+                            InterOpNumThreads = 1,
+                            IntraOpNumThreads = 1,
+                            GraphOptimizationLevel = GraphOptimizationLevel.ORT_DISABLE_ALL
+                        };
+                        
+                        using var session = new InferenceSession(modelPath, sessionOptions);
+                        Console.WriteLine("  ✅ 안전 모드 로딩 성공!");
+                        
+                        TestInferenceWithModel(session);
+                        return; // 성공하면 다른 경로 테스트 생략
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"  ❌ 안전 모드 실패: {ex.GetType().Name}: {ex.Message}");
+                        if (ex.InnerException != null)
+                        {
+                            Console.WriteLine($"    내부 오류: {ex.InnerException.Message}");
+                        }
+                    }
+                    
+                    // 3. CPU 전용 모드로 시도
+                    try
+                    {
+                        Console.WriteLine("  🔧 CPU 전용 모드로 시도...");
+                        var sessionOptions = new SessionOptions();
+                        sessionOptions.AppendExecutionProvider_CPU();
+                        
+                        using var session = new InferenceSession(modelPath, sessionOptions);
+                        Console.WriteLine("  ✅ CPU 전용 모드 로딩 성공!");
+                        
+                        TestInferenceWithModel(session);
+                        return; // 성공하면 다른 경로 테스트 생략
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"  ❌ CPU 전용 모드 실패: {ex.GetType().Name}: {ex.Message}");
+                        if (ex.InnerException != null)
+                        {
+                            Console.WriteLine($"    내부 오류: {ex.InnerException.Message}");
+                        }
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("❌ 파일이 존재하지 않음");
+                }
+            }
+            
+            Console.WriteLine("\n❌ 모든 모델 로딩 시도 실패!");
+            Console.WriteLine("💡 가능한 해결책:");
+            Console.WriteLine("  1. PyTorch 2.4 또는 2.5로 모델 재생성");
+            Console.WriteLine("  2. ONNX opset 버전을 14 또는 15로 낮춰서 생성");
+            Console.WriteLine("  3. 다른 호환 모델 사용");
+        }
+
+        /// <summary>
+        /// 🧪 모델로 간단한 추론 테스트
+        /// </summary>
+        private static void TestInferenceWithModel(InferenceSession session)
+        {
+            try
+            {
+                Console.WriteLine("    🧪 추론 테스트 시작...");
+                
+                var inputMeta = session.InputMetadata.Values.First();
+                var inputShape = inputMeta.Dimensions.ToArray();
+                
+                Console.WriteLine($"    📊 입력 형태: {string.Join("x", inputShape)}");
+                
+                if (inputShape.Length == 4 && inputShape[1] == 3)
+                {
+                    // 더미 입력 생성 (1, 3, height, width)
+                    var inputTensor = new DenseTensor<float>(inputShape);
+                    
+                    // 정규화된 랜덤 값으로 채우기
+                    var random = new Random();
+                    for (int i = 0; i < inputTensor.Length; i++)
+                    {
+                        inputTensor.SetValue(i, (float)random.NextDouble());
+                    }
+                    
+                    var inputs = new List<NamedOnnxValue>
+                    {
+                        NamedOnnxValue.CreateFromTensor(session.InputMetadata.Keys.First(), inputTensor)
+                    };
+                    
+                    var startTime = DateTime.Now;
+                    using var results = session.Run(inputs);
+                    var elapsed = (DateTime.Now - startTime).TotalMilliseconds;
+                    
+                    var output = results.First().AsTensor<float>();
+                    
+                    Console.WriteLine($"    ✅ 추론 성공! 시간: {elapsed:F1}ms, 출력 크기: {output.Length}");
+                    
+                    // 출력 값 샘플 확인
+                    if (output.Length > 0)
+                    {
+                        var firstValues = new float[Math.Min(10, output.Length)];
+                        for (int i = 0; i < firstValues.Length; i++)
+                        {
+                            firstValues[i] = output.GetValue(i);
+                        }
+                        Console.WriteLine($"    📊 출력 샘플: [{string.Join(", ", firstValues.Select(v => v.ToString("F4")))}...]");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("    ⚠️ 예상과 다른 입력 형태 - 추론 테스트 건너뛰기");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"    ❌ 추론 테스트 실패: {ex.GetType().Name}: {ex.Message}");
             }
         }
 

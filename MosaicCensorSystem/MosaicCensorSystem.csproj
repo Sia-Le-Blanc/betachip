@@ -2,49 +2,170 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net6.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <ImplicitUsings>disable</ImplicitUsings>
     
-    <!-- 🚨 CRITICAL: Runtime 크래시 방지 설정 -->
-    <PublishSingleFile>false</PublishSingleFile>
-    <SelfContained>false</SelfContained>
-    <RuntimeIdentifier></RuntimeIdentifier>
+    <!-- 🔧 빌드 최적화 설정 -->
     <Platform>x64</Platform>
     <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
     
-    <!-- 🚨 CRITICAL: 메모리 관리 최적화 -->
+    <!-- 🔧 런타임 최적화 (OpenCV + ONNX) -->
+    <PublishSingleFile>false</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseAppHost>true</UseAppHost>
+    
+    <!-- 🔧 메모리 관리 최적화 -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
     <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
     
-    <!-- 🚨 CRITICAL: 네이티브 라이브러리 호환성 -->
-    <PreferredUILang>en-US</PreferredUILang>
-    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <!-- 🔧 디버깅 및 최적화 -->
+    <Optimize>false</Optimize>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    
+    <!-- 🔧 언어 및 호환성 -->
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    
+    <!-- 🔧 DPI 설정 (manifest 경고 해결) -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    
+    <!-- 🔧 어셈블리 정보 -->
+    <AssemblyTitle>Mosaic Censor System</AssemblyTitle>
+    <AssemblyDescription>Real-time screen censoring system with ONNX AI detection (PyTorch 2.6.0 Compatible)</AssemblyDescription>
+    <AssemblyVersion>6.0.0.0</AssemblyVersion>
+    <FileVersion>6.0.0.0</FileVersion>
+    <Copyright>Copyright © 2024</Copyright>
+    
+    <!-- 🔧 Windows 전용 설정 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <StartupObject>MosaicCensorSystem.Program</StartupObject>
+  </PropertyGroup>
+
+  <!-- 🔧 조건부 컴파일 상수 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <DefineConstants>DEBUG;TRACE;WINDOWS</DefineConstants>
     <Optimize>false</Optimize>
     <DebugType>full</DebugType>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <DefineConstants>TRACE;WINDOWS</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+    <TrimMode>partial</TrimMode>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <!-- 🔧 PyTorch 2.6.0 호환 최신 패키지들 -->
   <ItemGroup>
-    <!-- 🚨 CRITICAL: 안전한 버전으로 다운그레이드 -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.15.1" />
-    <PackageReference Include="OpenCvSharp4" Version="4.8.0.20230708" />
-    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.8.0.20230708" />
-    <PackageReference Include="OpenCvSharp4.Extensions" Version="4.8.0.20230708" />
+    <!-- ONNX Runtime - PyTorch 2.6.0 호환 최최신 버전 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Extensions" Version="0.13.0" />
+    
+    <!-- GPU 가속 지원 (선택적, NVIDIA GPU 있는 경우) -->
+    <!-- <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.19.2" /> -->
+    
+    <!-- OpenCV - 최신 안정 버전 -->
+    <PackageReference Include="OpenCvSharp4" Version="4.9.0.20240103" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.9.0.20240103" />
+    <PackageReference Include="OpenCvSharp4.Extensions" Version="4.9.0.20240103" />
+    
+    <!-- Windows Forms 지원 -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    
+    <!-- 수학 및 성능 라이브러리 -->
+    <PackageReference Include="System.Numerics.Vectors" Version="4.5.0" />
+    <PackageReference Include="System.Memory" Version="4.5.5" />
+    
+    <!-- JSON 처리 (설정 파일용) - 보안 취약성 해결 -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    
+    <!-- 진단 및 로깅 -->
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
   </ItemGroup>
 
+  <!-- 🔧 리소스 파일 -->
   <ItemGroup>
     <None Update="Resources\best.onnx">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-  </ItemGroup>
-
-  <!-- 🚨 CRITICAL: 런타임 설정 -->
-  <ItemGroup>
-    <None Update="runtimeconfig.json">
+    <None Update="Resources\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="app.manifest">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!-- 🔧 네이티브 라이브러리 자동 복사 -->
+  <ItemGroup>
+    <Content Include="runtimes\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </Content>
+  </ItemGroup>
+
+  <!-- 🔧 ONNX Runtime 네이티브 라이브러리 확실히 복사 -->
+  <Target Name="CopyOnnxRuntimeFiles" AfterTargets="Build">
+    <ItemGroup>
+      <OnnxFiles Include="$(NuGetPackageRoot)microsoft.ml.onnxruntime\**\runtimes\win-x64\native\*" />
+      <OnnxExtFiles Include="$(NuGetPackageRoot)microsoft.ml.onnxruntime.extensions\**\runtimes\win-x64\native\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(OnnxFiles)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" ContinueOnError="true" />
+    <Copy SourceFiles="@(OnnxExtFiles)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
+
+  <!-- 🔧 OpenCV 네이티브 라이브러리 확실히 복사 -->
+  <Target Name="CopyOpenCvFiles" AfterTargets="Build">
+    <ItemGroup>
+      <OpenCvFiles Include="$(NuGetPackageRoot)opencvsharp4.runtime.win\**\runtimes\win-x64\native\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(OpenCvFiles)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
+
+  <!-- 🔧 컴파일 시 경고 제어 -->
+  <PropertyGroup>
+    <!-- Nullable 관련 경고 억제 -->
+    <NoWarn>$(NoWarn);CS8618;CS8625;CS8604;CS8603;CS8602;CS8619</NoWarn>
+    
+    <!-- NuGet 관련 경고 억제 -->
+    <NoWarn>$(NoWarn);NU1701;NU1702;NU1705;NU1603</NoWarn>
+    
+    <!-- 플랫폼 호환성 경고 억제 -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    
+    <!-- 사용되지 않는 필드 경고 억제 -->
+    <NoWarn>$(NoWarn);CS0414</NoWarn>
+    
+    <!-- DPI 설정 경고 억제 (manifest에서 제거하고 프로젝트 속성으로 이동) -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <!-- 🔧 런타임 설정 -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.Server" Value="false" />
+    <RuntimeHostConfigurationOption Include="System.GC.Concurrent" Value="true" />
+    <RuntimeHostConfigurationOption Include="System.Threading.ThreadPool.MinThreads" Value="4" />
+    <RuntimeHostConfigurationOption Include="System.Threading.ThreadPool.MaxThreads" Value="25" />
+  </ItemGroup>
+
+  <!-- 🔧 빌드 시 정리 작업 -->
+  <Target Name="CleanTemp" BeforeTargets="Build">
+    <ItemGroup>
+      <TempFiles Include="$(OutputPath)*.tmp" />
+      <TempFiles Include="$(OutputPath)*.temp" />
+      <LogFiles Include="$(OutputPath)*_log.txt" />
+      <LogFiles Include="$(OutputPath)onnx_*.txt" />
+    </ItemGroup>
+    <Delete Files="@(TempFiles)" ContinueOnError="true" />
+    <Delete Files="@(LogFiles)" ContinueOnError="true" />
+  </Target>
 
 </Project>
