@@ -1,4 +1,6 @@
-# Build results
+# C# / .NET Core 프로젝트용 .gitignore
+
+## 빌드 결과물
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
@@ -14,30 +16,255 @@ bld/
 [Ll]og/
 [Ll]ogs/
 
-# Visual Studio 2015/2017 cache/options directory
-.vs/
-
-# User-specific files
-*.rsuser
-*.suo
+## Visual Studio 임시 파일
+*.tmp
+*.temp
 *.user
 *.userosscache
 *.sln.docstates
+*.suo
+*.cache
+*.ilk
+*.log
+*.vsidx
+*.tlog
 
-# NuGet Packages
+## Visual Studio Code
+.vscode/
+*.code-workspace
+
+## ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+## NuGet 패키지
 *.nupkg
 *.snupkg
-[Pp]ackages/
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
 
-# Runtime config (auto-generated)
-runtimeconfig.json
-runtimeconfig.dev.json
+## MSTest 테스트 결과
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
 
-# Log files
-*.log
-*.txt
-debug_*.jpg
+## .NET Core 빌드 결과
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## StyleCop
+StyleCopReport.xml
+
+## NCrunch
+_NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+
+## MightyMoose
+*.mm.*
+AutoTest.Net/
+
+## Web workbench (sass)
+.sass-cache/
+
+## Installshield output folder
+[Ee]xpress/
+
+## DocProject 빌드 결과
+DocProject/buildhelp/
+DocProject/Help/*.HxT
+DocProject/Help/*.HxC
+DocProject/Help/Html2
+DocProject/Help/html
+
+## Click-Once directory
+publish/
+
+## Publish Web Output
+*.[Pp]ublish.xml
+*.azurePubxml
+*.pubxml
+*.publishproj
+
+## Microsoft Azure Web App publish settings
+PublishScripts/
+
+## NuGet 복원 후 생성되는 파일들
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+
+## Microsoft Fakes
+FakesAssemblies/
+
+## GhostDoc plugin setting file
+*.GhostDoc.xml
+
+## Node.js Tools for Visual Studio
+.ntvs_analysis.dat
+node_modules/
+
+## Visual Studio 6 build log
+*.plg
+
+## Visual Studio 6 workspace options file
+*.opt
+
+## Visual Studio 6 auto-generated workspace file (contains which files were open etc.)
+*.vbw
+
+## Visual Studio LightSwitch build output
+**/*.HTMLClient/GeneratedArtifacts
+**/*.DesktopClient/GeneratedArtifacts
+**/*.DesktopClient/ModelManifest.xml
+**/*.Server/GeneratedArtifacts
+**/*.Server/ModelManifest.xml
+_Pvt_Extensions
+
+## Paket dependency manager
+.paket/paket.exe
+paket-files/
+
+## FAKE - F# Make
+.fake/
+
+## CodeRush personal settings
+.cr/personal
+
+## Python Tools for Visual Studio (PTVS)
+__pycache__/
+*.pyc
+
+## Cake - Uncomment if you are using it
+# tools/**
+# !tools/packages.config
+
+## Tabs Studio
+*.tss
+
+## Telerik's JustMock configuration file
+*.jmconfig
+
+## BizTalk build output
+*.btp.cs
+*.btm.cs
+*.odx.cs
+*.xsd.cs
+
+## OpenCover UI analysis results
+OpenCover/
+
+## Azure Stream Analytics local run output
+ASALocalRun/
+
+## MSBuild Binary and Structured Log
+*.binlog
+
+## NVidia Nsight GPU debugger configuration file
+*.nvuser
+
+## MFractors (Xamarin productivity tool) working folder
+.mfractor/
+
+## Local History for Visual Studio
+.localhistory/
+
+## BeatPulse healthcheck temp database
+healthchecksdb
+
+## Backup folder for Package Reference Convert tool in Visual Studio 2017
+MigrationBackup/
+
+## Ionide (cross platform F# VS Code tools) working folder
+.ionide/
+
+## Fody - auto-generated XML schema
+FodyWeavers.xsd
+
+####################
+# 프로젝트 특화 설정 #
+####################
+
+## ONNX 모델 파일들 (용량이 큰 경우 Git LFS 사용 권장)
+# *.onnx
+# Resources/*.onnx
+
+## 디버그 캡처 이미지들
+debug_captures/
 capture_test.jpg
+test_*.jpg
+test_*.png
 
-# macOS
+## 로그 파일들
+*.log
+*_log.txt
+onnx_system_log.txt
+fatal_crash_prevented.log
+ui_crash_prevented.log
+top_level_crash_prevented.txt
+progressive_error.log
+emergency_log.txt
+
+## 임시 설정 파일들
+config_temp.json
+settings_backup.json
+
+## 런타임 생성 파일들
+runtimeconfig.json
+*.runtimeconfig.json
+*.deps.json
+
+## 네이티브 라이브러리들 (NuGet에서 자동 복사)
+opencv_*.dll
+onnxruntime*.dll
+onnxruntime_providers_*.dll
+
+## 성능 프로파일링 결과
+*.vsp
+*.psess
+*.vspx
+*.sap
+
+## dotMemory
+*.dmw
+*.dmw.*
+
+## JetBrains Rider
+.idea/
+*.sln.iml
+
+## macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+## Linux
+*~
+
+## Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+## 사용자 설정 백업
+backup/
+old/
+temp/
+temporary/

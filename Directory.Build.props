@@ -1,11 +1,87 @@
 <Project>
+
+  <!-- 🔧 전역 프로젝트 설정 -->
   <PropertyGroup>
-    <TargetFramework>net6.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <!-- 기본 언어 및 버전 설정 -->
+    <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    
+    <!-- 플랫폼 설정 -->
     <Platform>x64</Platform>
     <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    
+    <!-- 어셈블리 메타데이터 -->
+    <Company>Mosaic Censor System</Company>
+    <Product>Real-time Screen Censoring System</Product>
+    <Copyright>Copyright © 2024</Copyright>
+    <Version>6.0.0</Version>
+    <AssemblyVersion>6.0.0.0</AssemblyVersion>
+    <FileVersion>6.0.0.0</FileVersion>
+    
+    <!-- 패키지 메타데이터 -->
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/yourusername/mosaic-censor-system</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/yourusername/mosaic-censor-system</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    
+    <!-- 빌드 최적화 -->
+    <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
+    <Optimize Condition="'$(Configuration)' == 'Debug'">false</Optimize>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    
+    <!-- 메모리 및 성능 최적화 -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
   </PropertyGroup>
+
+  <!-- 🔧 조건부 컴파일 상수 -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DefineConstants>DEBUG;TRACE;WINDOWS</DefineConstants>
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DefineConstants>TRACE;WINDOWS</DefineConstants>
+    <DebugType>pdbonly</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+  <!-- 🔧 공통 패키지 버전 관리 -->
+  <PropertyGroup>
+    <OnnxRuntimeVersion>1.16.3</OnnxRuntimeVersion>
+    <OpenCvSharpVersion>4.9.0.20240103</OpenCvSharpVersion>
+    <SystemDrawingCommonVersion>8.0.0</SystemDrawingCommonVersion>
+  </PropertyGroup>
+
+  <!-- 🔧 경고 및 오류 제어 -->
+  <PropertyGroup>
+    <!-- Nullable 관련 경고 억제 -->
+    <NoWarn>$(NoWarn);CS8618;CS8625;CS8604;CS8603;CS8602</NoWarn>
+    
+    <!-- NuGet 관련 경고 억제 -->
+    <NoWarn>$(NoWarn);NU1701;NU1702;NU1705</NoWarn>
+    
+    <!-- 플랫폼 호환성 경고 억제 -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <!-- 🔧 소스 링크 설정 (디버깅 개선) -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <!-- 🔧 코드 분석 설정 -->
+  <PropertyGroup>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
 </Project>
